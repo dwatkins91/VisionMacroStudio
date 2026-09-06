@@ -1,0 +1,47 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Vision Macro Studio generated data
+projects/
+runs/
+logs/
+captures/
+datasets/
+models/
+*.pt
+*.onnx
+*.engine
+
+# Portable and PyInstaller build output
+.portable_build/
+build/
+dist/
+release/
+*.toc
+*.manifest
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+settings.json
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+

@@ -185,6 +185,7 @@ def verify_bundle(bundle: Path) -> None:
 
 def finish_release(bundle: Path, demo_project: Path | None) -> Path:
     shutil.copy2(PROJECT_ROOT / "PORTABLE_README.txt", bundle / "START_HERE.txt")
+    shutil.copy2(PROJECT_ROOT / "LICENSE", bundle / "LICENSE.txt")
     if demo_project is not None:
         shutil.copy2(demo_project, bundle / "Demo_Project.zip")
     archive_base = RELEASE_ROOT / f"VisionMacroStudio-Portable-v{app_version()}"

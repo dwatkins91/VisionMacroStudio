@@ -29,6 +29,8 @@ from app.automation.coordinates import (  # noqa: E402
     resolve_step_coordinate,
 )
 from app.automation.debugger import analyze_step, step_needs_detection  # noqa: E402
+from app.automation.flow import compare_values, parse_value, step_destinations  # noqa: E402
+from app.automation.flowchart import flow_edges  # noqa: E402
 from app.automation.macro_io import (  # noqa: E402
     MacroFormatError,
     delete_step_preserving_destinations,
@@ -41,6 +43,7 @@ from app.automation.macro_io import (  # noqa: E402
     referenced_objects,
     reorder_steps_preserving_destinations,
     unique_macro_name,
+    bundled_macro_dependencies,
 )
 from app.automation.validator import analyze_macro, issue_counts  # noqa: E402
 from app.vision.dataset import automatic_split, class_counts, export_yolo  # noqa: E402
@@ -51,6 +54,13 @@ from app.vision.model_manager import (  # noqa: E402
     training_source_label,
 )
 from app.vision.detector import Detector, class_name_key, to_ultralytics_source  # noqa: E402
+from app.vision.assistant import (  # noqa: E402
+    bbox_iou,
+    dataset_quality_rows,
+    extract_training_metrics,
+    merge_label_suggestions,
+    near_duplicate_pairs,
+)
 
 
 def exercise_stability_engine() -> None:
@@ -83,6 +93,22 @@ def exercise_stability_engine() -> None:
         mss_module = ModuleType("mss")
         mss_module.mss = lambda: None
         sys.modules["mss"] = mss_module
+    if importlib.util.find_spec("pynput") is None:
+        pynput_module = ModuleType("pynput")
+        mouse_module = ModuleType("pynput.mouse")
+        keyboard_module = ModuleType("pynput.keyboard")
+
+        class TestButton:
+            left = "left"
+            middle = "middle"
+            right = "right"
+
+        mouse_module.Button = TestButton
+        pynput_module.mouse = mouse_module
+        pynput_module.keyboard = keyboard_module
+        sys.modules["pynput"] = pynput_module
+        sys.modules["pynput.mouse"] = mouse_module
+        sys.modules["pynput.keyboard"] = keyboard_module
 
     from app.automation.engine import MacroWorker
 
@@ -133,6 +159,39 @@ def exercise_stability_engine() -> None:
     )
     assert found is None and checks["count"] == 3
 
+    recovery_macro = {
+        "id": "recovery-id",
+        "name": "Failure Branch Test",
+        "steps": [
+            {
+                "enabled": True,
+                "action": "WAIT_FOR_OBJECT",
+                "object": "Target",
+                "timeout": 0,
+                "max_detection_attempts": 1,
+                "on_timeout": "go_to_step",
+                "failure_step": 3,
+            },
+            {
+                "enabled": True,
+                "action": "ADD_VARIABLE",
+                "variable": "wrong_route",
+                "amount": 1,
+            },
+            {
+                "enabled": True,
+                "action": "ADD_VARIABLE",
+                "variable": "recovered",
+                "amount": 1,
+            },
+        ],
+    }
+    worker = MacroWorker(recovery_macro, None)
+    worker._interruptible_sleep = lambda _seconds: False
+    worker._detect = never_detect
+    assert worker._execute_program(recovery_macro, None, root=True) == "completed"
+    assert worker.variables == {"recovered": 1}
+
     worker = MacroWorker({"name": "Cooldown Test", "steps": []}, None)
     worker._remember_detection_click(detection, (0, 0), "Target", 5)
     nearby = dict(detection)
@@ -141,6 +200,55 @@ def exercise_stability_engine() -> None:
         [nearby, far_away], (0, 0), True
     )
     assert ignored == 1 and allowed == [far_away]
+
+    reusable = {
+        "id": "increment-id",
+        "name": "Increment",
+        "steps": [
+            {
+                "enabled": True,
+                "action": "ADD_VARIABLE",
+                "variable": "runs",
+                "amount": 1,
+            }
+        ],
+    }
+    parent = {
+        "id": "parent-id",
+        "name": "Variable Parent",
+        "steps": [
+            {
+                "enabled": True,
+                "action": "SET_VARIABLE",
+                "variable": "runs",
+                "variable_value": "0",
+            },
+            {
+                "enabled": True,
+                "action": "CALL_MACRO",
+                "macro_id": "increment-id",
+                "macro_name": "Increment",
+            },
+            {
+                "enabled": True,
+                "action": "IF_VARIABLE",
+                "variable": "runs",
+                "comparison": ">=",
+                "compare_value": "1",
+                "true_step": 4,
+                "false_step": 1,
+            },
+            {
+                "enabled": True,
+                "action": "ADD_VARIABLE",
+                "variable": "success",
+                "amount": 1,
+            },
+        ],
+    }
+    worker = MacroWorker(parent, None, macro_library=[parent, reusable])
+    assert worker._execute_program(parent, None, root=True) == "completed"
+    assert worker.variables == {"runs": 1, "success": 1}
 
     from app.capture import grabber
 
@@ -207,6 +315,17 @@ def main() -> None:
         wait_seconds = randomized_seconds(6, 9)
         assert 6 <= wait_seconds <= 9
     assert randomized_seconds(7, 7) == 7
+    assert parse_value("5") == 5
+    assert parse_value("true") is True
+    assert compare_values("5", ">=", 4)
+    assert compare_values("ready", "==", "ready")
+    assert step_destinations(
+        {
+            "action": "IF_VARIABLE",
+            "true_step": 4,
+            "false_step": 2,
+        }
+    ) == [4, 2]
     watch_bounds = {"left": 1920, "top": 0, "width": 1920, "height": 1080}
     assert relative_point(2400, 540, watch_bounds) == (0.25, 0.5)
     assert point_from_relative(
@@ -308,6 +427,34 @@ def main() -> None:
     assert inserted[0]["target_steps"] == [3, 5]
     deleted = delete_step_preserving_destinations(builder_steps, 1)
     assert deleted[0]["target_steps"] == [4, 3]
+    advanced_steps = [
+        {
+            "enabled": True,
+            "action": "WAIT_FOR_OBJECT",
+            "object": "Primary",
+            "timeout": 1,
+            "on_timeout": "go_to_step",
+            "failure_step": 4,
+        },
+        {"enabled": True, "action": "SET_VARIABLE", "variable": "runs", "variable_value": "0"},
+        {
+            "enabled": True,
+            "action": "IF_VARIABLE",
+            "variable": "runs",
+            "comparison": ">=",
+            "compare_value": "5",
+            "true_step": 4,
+            "false_step": 2,
+        },
+        {"enabled": True, "action": "STOP"},
+    ]
+    advanced_reordered = reorder_steps_preserving_destinations(advanced_steps, 3, 1)
+    assert advanced_reordered[0]["failure_step"] == 2
+    assert advanced_reordered[3]["true_step"] == 2
+    assert advanced_reordered[3]["false_step"] == 3
+    graph = flow_edges(advanced_steps)
+    assert any(edge["kind"] == "failure" and edge["target"] == 3 for edge in graph)
+    assert any(edge["kind"] == "true" and edge["target"] == 3 for edge in graph)
 
     validation_macro = {
         "name": "Validation Check",
@@ -473,13 +620,31 @@ def main() -> None:
             if index % 2 == 0:
                 annotations.append({"class_name": "Enemy", "bbox": [180, 80, 45, 50]})
             project.add_screenshot(image, annotations, (0, 0))
+        first_shot = project.data["screenshots"][0]
+        suggestions = merge_label_suggestions(
+            first_shot["annotations"],
+            [
+                {"class_name": "Start_Button", "confidence": 0.95, "bbox": [20, 30, 80, 40]},
+                {"class_name": "Enemy", "confidence": 0.88, "bbox": [240, 120, 35, 35]},
+                {"class_name": "Unknown", "confidence": 0.99, "bbox": [2, 2, 10, 10]},
+            ],
+            project.data["classes"],
+            minimum_confidence=0.3,
+        )
+        assert len(suggestions) == 1 and suggestions[0]["class_name"] == "Enemy"
+        assert bbox_iou([0, 0, 10, 10], [0, 0, 10, 10]) == 1
+        assert project.add_annotations(first_shot["id"], suggestions) == 1
+        assert len(first_shot["annotations"]) == 3
         automatic_split(project, 80, seed=1)
         dataset_yaml = export_yolo(project)
         assert dataset_yaml.exists()
         assert class_counts(project)["Start_Button"] == 6
+        assert dataset_quality_rows(project)
+        duplicate_pairs, duplicate_scan_truncated = near_duplicate_pairs(project)
+        assert isinstance(duplicate_pairs, list) and duplicate_scan_truncated is False
         assert any(s["split"] == "val" for s in project.data["screenshots"])
         project.rename_class("Enemy", "Target")
-        assert class_counts(project)["Target"] == 3
+        assert class_counts(project)["Target"] == 4
         project.data["macros"].append(
             {
                 "name": "Conditional Smoke Macro",
@@ -533,6 +698,65 @@ def main() -> None:
             }
         )
         project.save()
+        reusable_macro = {
+            "id": "submacro-id",
+            "name": "Reusable Deposit",
+            "steps": [
+                {"enabled": True, "action": "SET_VARIABLE", "variable": "runs", "variable_value": "0"},
+                {"enabled": True, "action": "ADD_VARIABLE", "variable": "runs", "amount": 1},
+                {
+                    "enabled": True,
+                    "action": "IF_VARIABLE",
+                    "variable": "runs",
+                    "comparison": ">=",
+                    "compare_value": "1",
+                    "true_step": 4,
+                    "false_step": 2,
+                },
+                {"enabled": True, "action": "STOP"},
+            ],
+        }
+        project.data["macros"].append(reusable_macro)
+        callable_macro = {
+            "id": "caller-id",
+            "name": "Reusable Caller",
+            "steps": [
+                {
+                    "enabled": True,
+                    "action": "CALL_MACRO",
+                    "macro_id": "submacro-id",
+                    "macro_name": "Reusable Deposit",
+                }
+            ],
+        }
+        project.data["macros"].append(callable_macro)
+        project.save()
+        assert not issue_counts(
+            analyze_macro(callable_macro, project.data["classes"], project.data["macros"])
+        )["error"]
+        recursive_macro = {
+            "id": "recursive-id",
+            "name": "Recursive",
+            "steps": [
+                {
+                    "enabled": True,
+                    "action": "CALL_MACRO",
+                    "macro_id": "recursive-id",
+                    "macro_name": "Recursive",
+                }
+            ],
+        }
+        assert any(
+            issue.code == "recursive_submacro"
+            for issue in analyze_macro(
+                recursive_macro,
+                project.data["classes"],
+                [*project.data["macros"], recursive_macro],
+            )
+        )
+        assert bundled_macro_dependencies(callable_macro, project.data["macros"]) == [
+            reusable_macro
+        ]
         reopened = ProjectManager()
         reopened.open(project.project_file)
         saved_macro = reopened.data["macros"][0]
@@ -561,9 +785,19 @@ def main() -> None:
         )
         shared_macro, metadata = import_macro_file(macro_file)
         assert shared_macro == saved_macro
-        assert metadata["format_version"] == 2
+        assert metadata["format_version"] == 3
         assert metadata["app_version"] == "test-version"
         assert metadata["screen_layout"][0]["width"] == 1920
+        bundled_file = root / "bundled_macro.vmsmacro.json"
+        export_macro_file(
+            bundled_file,
+            callable_macro,
+            "test-version",
+            macro_library=project.data["macros"],
+        )
+        bundled_caller, bundled_metadata = import_macro_file(bundled_file)
+        assert bundled_caller["name"] == "Reusable Caller"
+        assert bundled_metadata["dependencies"][0]["name"] == "Reusable Deposit"
         assert referenced_objects(shared_macro) == ["Start_Button", "Target"]
         assert has_coordinate_steps(shared_macro)
         assert not has_absolute_coordinate_steps(shared_macro)
@@ -630,7 +864,7 @@ def main() -> None:
             "Smoke_Model_v1",
             "models/Smoke_Model_v1.pt",
             list(project.data["classes"]),
-            {"mAP50": 0.75},
+            {"mAP50": 0.75, "per_class": {"Start_Button": {"mAP50": 0.8}}},
             {
                 "source": {"type": "pretrained", "model_file": "yolo11n.pt"},
                 "epochs": 50,
@@ -638,6 +872,23 @@ def main() -> None:
         )
         assert training_source_label(first_model) == "yolo11n.pt"
         assert first_model["training"]["epochs"] == 50
+        assert first_model["metrics"]["per_class"]["Start_Button"]["mAP50"] == 0.8
+        class FakeBox:
+            ap50 = [0.8, 0.6]
+            maps = [0.5, 0.3]
+            ap_class_index = [0, 1]
+
+        class FakeResults:
+            results_dict = {
+                "metrics/mAP50(B)": 0.7,
+                "metrics/mAP50-95(B)": 0.4,
+            }
+            box = FakeBox()
+
+        extracted_metrics = extract_training_metrics(
+            FakeResults(), ["Start_Button", "Target"]
+        )
+        assert extracted_metrics["per_class"]["Target"]["mAP50"] == 0.6
         accept_model(project, "Smoke_Model_v1")
         assert project.data["models"][0]["accepted"] is True
         continued_model = {

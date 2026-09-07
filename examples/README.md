@@ -15,3 +15,7 @@ The priority-branch example also demonstrates consecutive confirmations, a
 maximum detection-check count, a clicked-object cooldown, and a post-click
 wait for the selected object to disappear. It also includes readable step
 names, a comment, and a colored Section divider introduced in version 0.1.18.
+
+The counter-submacro example uses macro format version 3. It bundles a reusable
+submacro, sets and increments a counter, and follows a true/false variable
+branch. Importing the one file adds both macros to the open project.

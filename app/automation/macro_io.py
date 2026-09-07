@@ -17,11 +17,16 @@ from app.automation.coordinates import (
     checked_normalized_region,
     coordinate_mode,
 )
+from app.automation.flow import (
+    COMPARISON_OPERATORS,
+    VARIABLE_ACTIONS,
+    valid_variable_name,
+)
 
 
 MACRO_FILE_FORMAT = "vision-macro-studio/macro"
-MACRO_FILE_VERSION = 2
-SUPPORTED_MACRO_FILE_VERSIONS = {1, 2}
+MACRO_FILE_VERSION = 3
+SUPPORTED_MACRO_FILE_VERSIONS = {1, 2, 3}
 MAX_MACRO_FILE_BYTES = 5 * 1024 * 1024
 COORDINATE_ACTIONS = {"MOVE_MOUSE", "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"}
 DETECTION_ACTIONS = {
@@ -121,6 +126,44 @@ def validate_macro(macro: Any) -> dict[str, Any]:
                 raise MacroFormatError(
                     f"Step {index} points to missing step {target}."
                 )
+        if action in VARIABLE_ACTIONS:
+            variable_name = str(step.get("variable", "")).strip()
+            if not valid_variable_name(variable_name):
+                raise MacroFormatError(
+                    f"Step {index} needs a variable name that begins with a letter "
+                    "or underscore and contains only letters, numbers, and underscores."
+                )
+        if action == "ADD_VARIABLE":
+            try:
+                float(step.get("amount", 1))
+            except (TypeError, ValueError) as exc:
+                raise MacroFormatError(
+                    f"Step {index} has an invalid counter amount."
+                ) from exc
+        if action == "IF_VARIABLE":
+            operator = str(step.get("comparison", "=="))
+            if operator not in COMPARISON_OPERATORS:
+                raise MacroFormatError(
+                    f"Step {index} uses an unsupported variable comparison."
+                )
+            for field in ("true_step", "false_step"):
+                try:
+                    target = int(step.get(field, 0))
+                except (TypeError, ValueError) as exc:
+                    raise MacroFormatError(
+                        f"Step {index} has an invalid variable-branch destination."
+                    ) from exc
+                if target != 0 and not 1 <= target <= step_count:
+                    raise MacroFormatError(
+                        f"Step {index} points to missing step {target}."
+                    )
+        if action == "CALL_MACRO" and not (
+            str(step.get("macro_id", "")).strip()
+            or str(step.get("macro_name", "")).strip()
+        ):
+            raise MacroFormatError(
+                f"Step {index} does not identify a reusable macro."
+            )
         if action in COORDINATE_ACTIONS:
             raw_mode = step.get("coordinate_mode", "absolute")
             if str(raw_mode) not in COORDINATE_MODES:
@@ -165,6 +208,22 @@ def validate_macro(macro: Any) -> dict[str, Any]:
                 raise MacroFormatError(
                     f"Step {index} maximum detection checks must be from 0 to 100000."
                 )
+            timeout_behavior = str(step.get("on_timeout", "stop"))
+            if timeout_behavior not in {"stop", "continue", "go_to_step"}:
+                raise MacroFormatError(
+                    f"Step {index} has an unsupported timeout behavior."
+                )
+            if timeout_behavior == "go_to_step":
+                try:
+                    failure_step = int(step.get("failure_step", 0))
+                except (TypeError, ValueError) as exc:
+                    raise MacroFormatError(
+                        f"Step {index} has an invalid failure destination."
+                    ) from exc
+                if not 1 <= failure_step <= step_count:
+                    raise MacroFormatError(
+                        f"Step {index} points to missing step {failure_step}."
+                    )
         if action in DETECTION_CLICK_ACTIONS:
             try:
                 cooldown = float(step.get("click_cooldown_seconds", 0))
@@ -200,8 +259,10 @@ def export_macro_file(
     macro: dict[str, Any],
     app_version: str,
     screen_layout: list[dict[str, int]] | None = None,
+    macro_library: list[dict[str, Any]] | None = None,
 ) -> Path:
     checked = validate_macro(macro)
+    dependencies = bundled_macro_dependencies(checked, macro_library or [])
     payload = {
         "format": MACRO_FILE_FORMAT,
         "format_version": MACRO_FILE_VERSION,
@@ -209,6 +270,7 @@ def export_macro_file(
         "exported_at": _now(),
         "screen_layout": screen_layout or [],
         "macro": checked,
+        "dependencies": dependencies,
     }
     path = Path(path)
     path.write_text(
@@ -242,7 +304,15 @@ def import_macro_file(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             "app_version": payload.get("app_version"),
             "exported_at": payload.get("exported_at"),
             "screen_layout": payload.get("screen_layout", []),
+            "dependencies": [],
         }
+        if version >= 3:
+            dependencies = payload.get("dependencies", [])
+            if not isinstance(dependencies, list):
+                raise MacroFormatError("The reusable-macro bundle is invalid.")
+            metadata["dependencies"] = [
+                validate_macro(dependency) for dependency in dependencies
+            ]
         return macro, metadata
     if "name" in payload and "steps" in payload:
         return validate_macro(payload), {}
@@ -259,6 +329,66 @@ def unique_macro_name(name: str, existing_names: list[str]) -> str:
         candidate = f"{name} (Imported {number})"
         number += 1
     return candidate
+
+
+def macro_reference(step: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(step.get("macro_id", "")).strip(),
+        str(step.get("macro_name", "")).strip(),
+    )
+
+
+def find_macro_reference(
+    step: dict[str, Any], macro_library: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    macro_id, macro_name = macro_reference(step)
+    if macro_id:
+        match = next(
+            (item for item in macro_library if str(item.get("id", "")) == macro_id),
+            None,
+        )
+        if match is not None:
+            return match
+    if macro_name:
+        key = macro_name.casefold()
+        return next(
+            (item for item in macro_library if str(item.get("name", "")).casefold() == key),
+            None,
+        )
+    return None
+
+
+def bundled_macro_dependencies(
+    macro: dict[str, Any], macro_library: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Collect called macros recursively for a self-contained format-v3 export."""
+    collected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    root_identity = (
+        str(macro.get("id", "")),
+        str(macro.get("name", "")).casefold(),
+    )
+
+    def collect(source: dict[str, Any]) -> None:
+        for step in source.get("steps", []):
+            if step.get("action") != "CALL_MACRO":
+                continue
+            target = find_macro_reference(step, macro_library)
+            if target is None:
+                continue
+            identity = (
+                str(target.get("id", "")),
+                str(target.get("name", "")).casefold(),
+            )
+            if identity in seen or identity == root_identity:
+                continue
+            seen.add(identity)
+            checked = validate_macro(target)
+            collected.append(checked)
+            collect(target)
+
+    collect(macro)
+    return collected
 
 
 def referenced_objects(macro: dict[str, Any]) -> list[str]:
@@ -314,6 +444,18 @@ def _remap_step_destinations(
     elif action in {"GOTO_STEP", "REPEAT"} and "target_step" in result:
         try:
             result["target_step"] = mapped(result["target_step"])
+        except (TypeError, ValueError):
+            pass
+    elif action == "IF_VARIABLE":
+        for field in ("true_step", "false_step"):
+            if field in result:
+                try:
+                    result[field] = mapped(result[field])
+                except (TypeError, ValueError):
+                    pass
+    if action in DETECTION_ACTIONS and result.get("on_timeout") == "go_to_step":
+        try:
+            result["failure_step"] = mapped(result.get("failure_step", 0))
         except (TypeError, ValueError):
             pass
     return result

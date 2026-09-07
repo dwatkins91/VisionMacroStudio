@@ -65,6 +65,9 @@ class MacroStatusOverlay(QWidget):
         action = str(step.get("action", "")).replace("_", " ").title()
         name = str(step.get("name", "")).strip()
         label = name if name else action
+        macro_name = str(step.get("_runtime_macro_name", "")).strip()
+        if int(step.get("_runtime_depth", 0)) > 0 and macro_name:
+            label = f"{macro_name} · {label}"
         self.step_line.setText(f"Step {index + 1} · {label}")
         self.step_line.setToolTip(action if name else "")
         self.adjustSize()

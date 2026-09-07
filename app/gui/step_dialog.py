@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.automation.control import SUPPORTED_ACTIONS, destination_steps, object_names
+from app.automation.flow import COMPARISON_OPERATORS, valid_variable_name
 from app.automation.coordinates import (
     COORDINATE_MODE_LABELS,
     checked_bounds,
@@ -37,6 +38,8 @@ class StepDialog(QDialog):
         step: dict | None = None,
         parent=None,
         watch_bounds: dict[str, int] | None = None,
+        macro_choices: list[dict] | None = None,
+        current_macro_id: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Macro Step")
@@ -111,8 +114,14 @@ class StepDialog(QDialog):
         self.poll.setSingleStep(0.05)
         self.poll.setValue(float(self.step.get("poll_interval", 0.25)))
         self.on_timeout = QComboBox()
-        self.on_timeout.addItems(["stop", "continue"])
+        self.on_timeout.addItems(["stop", "continue", "go_to_step"])
         self.on_timeout.setCurrentText(self.step.get("on_timeout", "stop"))
+        self.failure_step = QSpinBox()
+        self.failure_step.setRange(1, 10000)
+        self.failure_step.setValue(int(self.step.get("failure_step", 1)))
+        self.failure_step.setToolTip(
+            "Destination used only when this detection step reaches its timeout or maximum check count."
+        )
         self.required_detections = QSpinBox()
         self.required_detections.setRange(1, 20)
         self.required_detections.setValue(
@@ -255,6 +264,57 @@ class StepDialog(QDialog):
         self.target_step = QSpinBox()
         self.target_step.setRange(1, 10000)
         self.target_step.setValue(int(self.step.get("target_step", 1)))
+        self.variable = QLineEdit(str(self.step.get("variable", "counter")))
+        self.variable.setMaxLength(64)
+        self.variable.setPlaceholderText("Example: completed_runs")
+        self.variable.setToolTip(
+            "Variable names begin with a letter or underscore and use no spaces. Variables reset at the start of each run."
+        )
+        self.variable_value = QLineEdit(
+            str(self.step.get("variable_value", "0"))
+        )
+        self.variable_value.setPlaceholderText("Number, true/false, or text")
+        self.amount = QDoubleSpinBox()
+        self.amount.setRange(-1_000_000_000, 1_000_000_000)
+        self.amount.setDecimals(3)
+        self.amount.setValue(float(self.step.get("amount", 1)))
+        self.comparison = QComboBox()
+        self.comparison.addItems(list(COMPARISON_OPERATORS))
+        self.comparison.setCurrentText(str(self.step.get("comparison", "==")))
+        self.compare_value = QLineEdit(str(self.step.get("compare_value", "0")))
+        self.true_step = QSpinBox()
+        self.true_step.setRange(0, 10000)
+        self.true_step.setSpecialValueText("Next step")
+        self.true_step.setValue(int(self.step.get("true_step", 0)))
+        self.false_step = QSpinBox()
+        self.false_step.setRange(0, 10000)
+        self.false_step.setSpecialValueText("Next step")
+        self.false_step.setValue(int(self.step.get("false_step", 0)))
+        self.called_macro = QComboBox()
+        available_macros = [
+            macro
+            for macro in (macro_choices or [])
+            if str(macro.get("id", "")) != str(current_macro_id)
+        ]
+        for macro in available_macros:
+            self.called_macro.addItem(
+                str(macro.get("name", "Untitled")), str(macro.get("id", ""))
+            )
+        saved_macro_id = str(self.step.get("macro_id", ""))
+        saved_macro_name = str(self.step.get("macro_name", ""))
+        selected_macro = self.called_macro.findData(saved_macro_id)
+        if selected_macro < 0 and saved_macro_name:
+            selected_macro = self.called_macro.findText(saved_macro_name)
+        if selected_macro < 0 and (saved_macro_id or saved_macro_name):
+            self.called_macro.addItem(
+                f"[Missing] {saved_macro_name or saved_macro_id}", saved_macro_id
+            )
+            selected_macro = self.called_macro.count() - 1
+        if selected_macro >= 0:
+            self.called_macro.setCurrentIndex(selected_macro)
+        if self.called_macro.count() == 0:
+            self.called_macro.addItem("No other macro is available", "")
+            self.called_macro.setEnabled(False)
         rows = [
             ("Enabled", self.enabled),
             ("Action", self.action),
@@ -271,6 +331,7 @@ class StepDialog(QDialog):
             ("Consecutive confirmations", self.required_detections),
             ("Maximum detection checks", self.max_detection_attempts),
             ("If timeout", self.on_timeout),
+            ("Failure destination", self.failure_step),
             ("Click X inside box", self.target_x),
             ("Click Y inside box", self.target_y),
             ("Random pixel offset", self.random_offset),
@@ -290,6 +351,14 @@ class StepDialog(QDialog):
             ("Selected coordinate", self.coordinate_status),
             ("Repeat count", self.count),
             ("Destination step", self.target_step),
+            ("Variable name", self.variable),
+            ("Variable value", self.variable_value),
+            ("Amount to add", self.amount),
+            ("Comparison", self.comparison),
+            ("Compare with", self.compare_value),
+            ("If true", self.true_step),
+            ("If false", self.false_step),
+            ("Reusable macro", self.called_macro),
         ]
         self.widgets = {label: widget for label, widget in rows}
         for label, widget in rows:
@@ -300,6 +369,7 @@ class StepDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.action.currentTextChanged.connect(self.update_visibility)
+        self.on_timeout.currentTextChanged.connect(self.update_visibility)
         self.coordinate_basis.currentIndexChanged.connect(
             self.coordinate_basis_changed
         )
@@ -347,6 +417,15 @@ class StepDialog(QDialog):
                 "Maximum detection checks",
                 "If timeout",
             }
+        if action in {
+            "WAIT_FOR_OBJECT",
+            "WAIT_FOR_ANY_OBJECT",
+            "WAIT_UNTIL_DISAPPEARS",
+            "CLICK_OBJECT",
+            "RIGHT_CLICK_OBJECT",
+            "CLICK_FIRST_AVAILABLE",
+        } and self.on_timeout.currentText() == "go_to_step":
+            visible.add("Failure destination")
         if action == "WAIT_FOR_ANY_OBJECT":
             visible.add("Destination step per object")
         if action in ("CLICK_OBJECT", "RIGHT_CLICK_OBJECT", "CLICK_FIRST_AVAILABLE"):
@@ -383,6 +462,20 @@ class StepDialog(QDialog):
             visible.add("Destination step")
         if action == "REPEAT":
             visible |= {"Repeat count", "Destination step"}
+        if action == "SET_VARIABLE":
+            visible |= {"Variable name", "Variable value"}
+        if action == "ADD_VARIABLE":
+            visible |= {"Variable name", "Amount to add"}
+        if action == "IF_VARIABLE":
+            visible |= {
+                "Variable name",
+                "Comparison",
+                "Compare with",
+                "If true",
+                "If false",
+            }
+        if action == "CALL_MACRO":
+            visible.add("Reusable macro")
         form = self.layout().itemAt(0).layout()
         for label, widget in self.widgets.items():
             widget.setVisible(label in visible)
@@ -428,6 +521,15 @@ class StepDialog(QDialog):
                     "on_timeout": self.on_timeout.currentText(),
                 }
             )
+        if action in {
+            "WAIT_FOR_OBJECT",
+            "WAIT_FOR_ANY_OBJECT",
+            "WAIT_UNTIL_DISAPPEARS",
+            "CLICK_OBJECT",
+            "RIGHT_CLICK_OBJECT",
+            "CLICK_FIRST_AVAILABLE",
+        } and self.on_timeout.currentText() == "go_to_step":
+            result["failure_step"] = self.failure_step.value()
         if action == "WAIT_FOR_ANY_OBJECT":
             result["target_steps"] = destination_steps(self.target_steps.text())
         if action in ("CLICK_OBJECT", "RIGHT_CLICK_OBJECT", "CLICK_FIRST_AVAILABLE"):
@@ -460,6 +562,37 @@ class StepDialog(QDialog):
             )
         elif action == "GOTO_STEP":
             result["target_step"] = self.target_step.value()
+        elif action == "SET_VARIABLE":
+            result.update(
+                {
+                    "variable": self.variable.text().strip(),
+                    "variable_value": self.variable_value.text(),
+                }
+            )
+        elif action == "ADD_VARIABLE":
+            result.update(
+                {
+                    "variable": self.variable.text().strip(),
+                    "amount": self.amount.value(),
+                }
+            )
+        elif action == "IF_VARIABLE":
+            result.update(
+                {
+                    "variable": self.variable.text().strip(),
+                    "comparison": self.comparison.currentText(),
+                    "compare_value": self.compare_value.text(),
+                    "true_step": self.true_step.value(),
+                    "false_step": self.false_step.value(),
+                }
+            )
+        elif action == "CALL_MACRO":
+            result.update(
+                {
+                    "macro_id": str(self.called_macro.currentData() or ""),
+                    "macro_name": self.called_macro.currentText(),
+                }
+            )
         return result
 
     def coordinate_result(self) -> dict:
@@ -650,6 +783,22 @@ class StepDialog(QDialog):
             "RIGHT_CLICK_OBJECT",
             "CLICK_FIRST_AVAILABLE",
         }
+        if action in {"SET_VARIABLE", "ADD_VARIABLE", "IF_VARIABLE"} and not valid_variable_name(
+            self.variable.text()
+        ):
+            QMessageBox.warning(
+                self,
+                "Invalid variable name",
+                "Use a name that begins with a letter or underscore and contains only letters, numbers, and underscores.",
+            )
+            return
+        if action == "CALL_MACRO" and not str(self.called_macro.currentData() or ""):
+            QMessageBox.warning(
+                self,
+                "Choose a reusable macro",
+                "Create another macro first, then select it here.",
+            )
+            return
         if (
             action in detection_actions
             and self.timeout_max.value() < self.timeout.value()

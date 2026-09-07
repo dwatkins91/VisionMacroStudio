@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from app.core.projects import ProjectManager
 
 from .dataset import export_yolo
+from .assistant import extract_training_metrics, preserve_training_reports
 from .model_manager import next_model_name, register_model
 
 MODEL_FILES = {
@@ -104,21 +105,21 @@ class TrainingWorker(QObject):
                 raise RuntimeError("Training finished, but best.pt was not created.")
             destination = self.project.path(f"models/{model_name}.pt")
             shutil.copy2(best, destination)
-            metrics = {}
-            try:
-                metrics = {
-                    "mAP50": float(results.results_dict.get("metrics/mAP50(B)", 0.0)),
-                    "mAP50-95": float(
-                        results.results_dict.get("metrics/mAP50-95(B)", 0.0)
-                    ),
-                }
-            except Exception:
-                pass
+            classes = list(self.project.data["classes"])
+            metrics = extract_training_metrics(results, classes)
+            absolute_reports = preserve_training_reports(
+                run_dir,
+                self.project.path(f"models/reports/{model_name}"),
+            )
+            reports = {
+                key: str(Path(path).relative_to(self.project.root)).replace("\\", "/")
+                for key, path in absolute_reports.items()
+            }
             record = register_model(
                 self.project,
                 model_name,
                 str(destination.relative_to(self.project.root)).replace("\\", "/"),
-                list(self.project.data["classes"]),
+                classes,
                 metrics,
                 {
                     "source": source,
@@ -128,6 +129,7 @@ class TrainingWorker(QObject):
                     "device": self.settings.get("device", "auto"),
                     "base_model_size": self.settings["model_size"],
                 },
+                reports,
             )
             self.completed.emit(record)
         except Exception as exc:

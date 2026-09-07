@@ -23,6 +23,10 @@ SUPPORTED_ACTIONS = (
     "GOTO_STEP",
     "STOP",
     "SECTION",
+    "SET_VARIABLE",
+    "ADD_VARIABLE",
+    "IF_VARIABLE",
+    "CALL_MACRO",
 )
 
 

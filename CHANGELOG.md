@@ -5,6 +5,19 @@ All notable changes to Vision Macro Studio are documented here.
 The project is currently in early development. Version numbers below describe
 working snapshots rather than a promise of backward compatibility.
 
+## [0.2.0] - 2026-09-07
+
+- Added a connected, scrollable Macro Flow view with labeled match, true/false, timeout, jump, repeat, and return routes.
+- Added run-scoped variables and counters with Set Variable, Add Variable, and If Variable actions.
+- Added reusable submacros through Call Macro, including nested execution, recursion protection, validation, overlay context, and bundled JSON export/import.
+- Added explicit detection-failure branches so a timeout or maximum-check limit can stop, continue, or go to a chosen step.
+- Advanced macro exports to format version 3 while retaining imports for versions 1 and 2.
+- Added assisted labeling: the accepted model can propose non-duplicate boxes on a saved capture, and the user approves each suggestion before it is persisted.
+- Added a dataset-quality dashboard with per-class coverage, average box size, position spread, recommendations, and near-duplicate screenshot detection.
+- Added per-class mAP50/mAP50-95 persistence for new training runs, model notes, best-mAP identification, side-by-side model comparison, and saved confusion/training plots.
+- Extended destination-safe reordering, validation, safe preview, logging, smoke tests, and packaged self-tests for the new v0.2.0 components.
+- Kept existing projects, macros, models, and version 1/2 macro files backward-compatible.
+
 ## [0.1.18] - 2026-09-07
 
 - Added drag-and-drop macro-step reordering with automatic branch-destination remapping.

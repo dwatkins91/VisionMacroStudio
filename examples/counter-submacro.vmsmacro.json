@@ -1,0 +1,71 @@
+{
+  "format": "vision-macro-studio/macro",
+  "format_version": 3,
+  "app_version": "0.2.0",
+  "exported_at": "2026-09-07T00:00:00+00:00",
+  "screen_layout": [],
+  "macro": {
+    "id": "example-counter-parent",
+    "name": "Counter and Submacro (Example)",
+    "time_limit_minutes": 5,
+    "monitor_index": 0,
+    "steps": [
+      {
+        "enabled": true,
+        "action": "SET_VARIABLE",
+        "name": "Reset loop counter",
+        "variable": "completed_runs",
+        "variable_value": "0"
+      },
+      {
+        "enabled": true,
+        "action": "CALL_MACRO",
+        "name": "Perform one reusable cycle",
+        "macro_id": "example-reusable-cycle",
+        "macro_name": "Reusable Cycle (Example)"
+      },
+      {
+        "enabled": true,
+        "action": "ADD_VARIABLE",
+        "name": "Count the completed cycle",
+        "variable": "completed_runs",
+        "amount": 1
+      },
+      {
+        "enabled": true,
+        "action": "IF_VARIABLE",
+        "name": "Run three cycles",
+        "variable": "completed_runs",
+        "comparison": ">=",
+        "compare_value": "3",
+        "true_step": 5,
+        "false_step": 2
+      },
+      {
+        "enabled": true,
+        "action": "WAIT",
+        "name": "Finished",
+        "duration": 0,
+        "duration_max": 0
+      }
+    ]
+  },
+  "dependencies": [
+    {
+      "id": "example-reusable-cycle",
+      "name": "Reusable Cycle (Example)",
+      "time_limit_minutes": 0,
+      "monitor_index": 0,
+      "steps": [
+        {
+          "enabled": true,
+          "action": "WAIT",
+          "name": "Reusable work placeholder",
+          "comment": "Replace this wait with the steps shared by multiple macros.",
+          "duration": 0.25,
+          "duration_max": 0.5
+        }
+      ]
+    }
+  ]
+}

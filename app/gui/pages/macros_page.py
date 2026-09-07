@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 import time
+import uuid
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -41,6 +42,7 @@ from app.automation.debugger import (
 )
 from app.automation.engine import MacroWorker
 from app.automation.control import destination_steps, object_names
+from app.automation.flow import step_destinations
 from app.automation.macro_io import (
     MacroFormatError,
     delete_step_preserving_destinations,
@@ -50,6 +52,7 @@ from app.automation.macro_io import (
     has_coordinate_steps,
     import_macro_file,
     insert_step_preserving_destinations,
+    find_macro_reference,
     referenced_objects,
     reorder_steps_preserving_destinations,
     unique_macro_name,
@@ -59,6 +62,7 @@ from app.automation.validator import analyze_macro, issue_counts
 from app.capture.grabber import grab_screen, list_monitors, monitor_bounds
 from app.core.context import AppContext
 from app.gui.macro_debug_dialog import MacroDebugDialog
+from app.gui.macro_flow_dialog import MacroFlowDialog
 from app.gui.macro_overlay import MacroStatusOverlay
 from app.gui.macro_validation_dialog import MacroValidationDialog
 from app.gui.region_picker import DetectionRegionPickerOverlay
@@ -232,8 +236,8 @@ class MacrosPage(QWidget):
         layout.addWidget(
             page_header(
                 "Macro Builder",
-                "Build resilient automation from detected objects. Name steps, add "
-                "sections, drag rows to reorder, and validate before running.",
+                "Build connected visual logic with named steps, variables, failure "
+                "routes, and reusable submacros; validate before running.",
             )
         )
         macro_bar = QHBoxLayout()
@@ -284,6 +288,12 @@ class MacrosPage(QWidget):
             edit_bar.addWidget(button)
             self.edit_buttons.append(button)
         edit_bar.addStretch()
+        self.flow_button = QPushButton("FLOW VIEW")
+        self.flow_button.setToolTip(
+            "Open a connected overview of normal flow, branches, loops, and failure routes."
+        )
+        self.flow_button.clicked.connect(self.show_flow_view)
+        edit_bar.addWidget(self.flow_button)
         self.validate_button = QPushButton("VALIDATE MACRO")
         self.validate_button.setToolTip(
             "Check destinations, classes, disabled targets, unreachable steps, "
@@ -424,6 +434,7 @@ class MacrosPage(QWidget):
             button.setEnabled(active)
         self.table.setDragEnabled(active)
         self.validate_button.setEnabled(active)
+        self.flow_button.setEnabled(active)
         self.draw_region_button.setEnabled(active)
         self.clear_region_button.setEnabled(
             active and bool(macro.get("detection_region"))
@@ -566,11 +577,14 @@ class MacrosPage(QWidget):
         action = step.get("action")
         if action == "CLICK_FIRST_AVAILABLE":
             names = object_names(step.get("objects", []))
-            return (
+            result = (
                 f"{' → '.join(names)} · ≥{float(step.get('confidence', 0.7)):.0%}"
                 f" · timeout {seconds_range('timeout', 'timeout_max', 30)}"
                 f"{stability_suffix()}"
             )
+            if step.get("on_timeout") == "go_to_step":
+                result += f" · timeout→{step.get('failure_step', 1)}"
+            return result
         if action == "WAIT_FOR_ANY_OBJECT":
             names = object_names(step.get("objects", []))
             targets = destination_steps(step.get("target_steps", []))
@@ -578,17 +592,23 @@ class MacrosPage(QWidget):
                 f"{name}→{'next' if target == 0 else target}"
                 for name, target in zip(names, targets)
             ]
-            return (
+            result = (
                 f"{', '.join(routes)} · ≥{float(step.get('confidence', 0.7)):.0%}"
                 f" · timeout {seconds_range('timeout', 'timeout_max', 30)}"
                 f"{stability_suffix()}"
             )
+            if step.get("on_timeout") == "go_to_step":
+                result += f" · timeout→{step.get('failure_step', 1)}"
+            return result
         if "OBJECT" in str(action) or "DISAPPEARS" in str(action):
-            return (
+            result = (
                 f"{step.get('object')} · ≥{float(step.get('confidence', 0.7)):.0%}"
                 f" · timeout {seconds_range('timeout', 'timeout_max', 30)}"
                 f"{stability_suffix()}"
             )
+            if step.get("on_timeout") == "go_to_step":
+                result += f" · timeout→{step.get('failure_step', 1)}"
+            return result
         if action in ("PRESS_KEY", "TYPE_TEXT"):
             return str(step.get("value", ""))
         if action == "WAIT":
@@ -620,6 +640,19 @@ class MacrosPage(QWidget):
             return f"repeat {step.get('count', 1)} time(s), return to step {step.get('target_step', 1)}"
         if action == "GOTO_STEP":
             return f"go to step {step.get('target_step', 1)}"
+        if action == "SET_VARIABLE":
+            return f"{step.get('variable', 'counter')} = {step.get('variable_value', '0')}"
+        if action == "ADD_VARIABLE":
+            return f"{step.get('variable', 'counter')} += {float(step.get('amount', 1)):g}"
+        if action == "IF_VARIABLE":
+            true_step = step.get("true_step", 0) or "next"
+            false_step = step.get("false_step", 0) or "next"
+            return (
+                f"{step.get('variable', 'counter')} {step.get('comparison', '==')} "
+                f"{step.get('compare_value', '0')} · true→{true_step} · false→{false_step}"
+            )
+        if action == "CALL_MACRO":
+            return f"run {step.get('macro_name') or step.get('macro_id')} and return"
         return ""
 
     def _enabled_changed(self, item: QTableWidgetItem) -> None:
@@ -638,6 +671,7 @@ class MacrosPage(QWidget):
         name, ok = QInputDialog.getText(self, "New Macro", "Macro name:")
         if ok and name.strip():
             macro = {
+                "id": str(uuid.uuid4()),
                 "name": name.strip(),
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "time_limit_minutes": 0,
@@ -659,20 +693,54 @@ class MacrosPage(QWidget):
             self, "Rename Macro", "Name:", text=macro["name"]
         )
         if ok and name.strip():
+            macro_id = str(macro.get("id", ""))
             macro["name"] = name.strip()
+            for candidate in self.context.projects.data.get("macros", []):
+                for step in candidate.get("steps", []):
+                    if (
+                        step.get("action") == "CALL_MACRO"
+                        and macro_id
+                        and str(step.get("macro_id", "")) == macro_id
+                    ):
+                        step["macro_name"] = macro["name"]
             self.save()
             self.context.macros_changed.emit()
 
     def delete_macro(self) -> None:
         macro = self.current_macro()
-        if (
-            macro
-            and QMessageBox.question(self, "Delete Macro", f"Delete {macro['name']}?")
-            == QMessageBox.Yes
-        ):
-            self.context.projects.data["macros"].remove(macro)
-            self.save()
-            self.context.macros_changed.emit()
+        if not macro:
+            return
+        macro_id = str(macro.get("id", ""))
+        macro_name = str(macro.get("name", ""))
+        callers: list[str] = []
+        for candidate in self.context.projects.data.get("macros", []):
+            if candidate is macro:
+                continue
+            if any(
+                step.get("action") == "CALL_MACRO"
+                and (
+                    (macro_id and str(step.get("macro_id", "")) == macro_id)
+                    or (
+                        not step.get("macro_id")
+                        and str(step.get("macro_name", "")).casefold()
+                        == macro_name.casefold()
+                    )
+                )
+                for step in candidate.get("steps", [])
+            ):
+                callers.append(str(candidate.get("name", "Untitled")))
+        message = f"Delete {macro_name}?"
+        if callers:
+            message += (
+                "\n\nIt is called by: "
+                + ", ".join(callers)
+                + ". Those macros will fail validation until their Call Macro steps are changed."
+            )
+        if QMessageBox.question(self, "Delete Macro", message) != QMessageBox.Yes:
+            return
+        self.context.projects.data["macros"].remove(macro)
+        self.save()
+        self.context.macros_changed.emit()
 
     def export_macro(self) -> None:
         macro = self.current_macro()
@@ -705,6 +773,7 @@ class MacrosPage(QWidget):
                 macro,
                 __version__,
                 screen_layout=list_monitors(),
+                macro_library=self.context.projects.data.get("macros", []),
             )
         except (MacroFormatError, OSError, ValueError) as exc:
             QMessageBox.critical(
@@ -738,6 +807,43 @@ class MacrosPage(QWidget):
             )
             return
         macros = self.context.projects.data["macros"]
+        dependencies = list(metadata.get("dependencies", []))
+        existing_ids = {str(item.get("id", "")) for item in macros}
+        dependency_by_name: dict[str, dict] = {}
+        added_dependencies = 0
+        for dependency in dependencies:
+            original_name = str(dependency.get("name", "Untitled"))
+            dependency_id = str(dependency.get("id", "")).strip()
+            if dependency_id and dependency_id in existing_ids:
+                existing = next(
+                    item for item in macros if str(item.get("id", "")) == dependency_id
+                )
+                dependency_by_name[original_name.casefold()] = existing
+                continue
+            if not dependency_id:
+                dependency_id = str(uuid.uuid4())
+                dependency["id"] = dependency_id
+            dependency["name"] = unique_macro_name(
+                original_name, [existing["name"] for existing in macros]
+            )
+            dependency_by_name[original_name.casefold()] = dependency
+            macros.append(dependency)
+            existing_ids.add(dependency_id)
+            added_dependencies += 1
+
+        for bundled in [macro, *dependencies]:
+            for step in bundled.get("steps", []):
+                if step.get("action") != "CALL_MACRO" or step.get("macro_id"):
+                    continue
+                target = dependency_by_name.get(
+                    str(step.get("macro_name", "")).casefold()
+                )
+                if target is not None:
+                    step["macro_id"] = target.get("id", "")
+                    step["macro_name"] = target.get("name", "")
+        macro_id = str(macro.get("id", "")).strip()
+        if not macro_id or macro_id in existing_ids:
+            macro["id"] = str(uuid.uuid4())
         macro["name"] = unique_macro_name(
             macro["name"], [existing["name"] for existing in macros]
         )
@@ -792,6 +898,8 @@ class MacrosPage(QWidget):
         self.macro_combo.setCurrentIndex(self.macro_combo.count() - 1)
         self.context.log(f"Imported macro: {macro['name']}")
         message = f"Imported {macro['name']} with {len(macro['steps'])} steps."
+        if added_dependencies:
+            message += f" Added {added_dependencies} reusable macro(s) from the bundle."
         if notices:
             message += "\n\n" + "\n".join(f"• {notice}" for notice in notices)
         QMessageBox.information(self, "Macro imported", message)
@@ -809,7 +917,20 @@ class MacrosPage(QWidget):
         if macro is None:
             return []
         classes = self.context.projects.data.get("classes", [])
-        return analyze_macro(macro, classes)
+        return analyze_macro(
+            macro,
+            classes,
+            self.context.projects.data.get("macros", []),
+        )
+
+    def show_flow_view(self) -> None:
+        macro = self.current_macro()
+        if macro is None:
+            QMessageBox.information(
+                self, "Choose a macro", "Create or select a macro first."
+            )
+            return
+        MacroFlowDialog(macro, self).exec()
 
     def validate_current_macro(self) -> None:
         macro = self.current_macro()
@@ -849,6 +970,8 @@ class MacrosPage(QWidget):
             classes,
             parent=self,
             watch_bounds=self.current_watch_bounds(macro),
+            macro_choices=self.context.projects.data.get("macros", []),
+            current_macro_id=str(macro.get("id", "")),
         )
         if dialog.exec():
             macro["steps"].append(dialog.result_step())
@@ -871,6 +994,8 @@ class MacrosPage(QWidget):
             },
             self,
             watch_bounds=self.current_watch_bounds(macro),
+            macro_choices=self.context.projects.data.get("macros", []),
+            current_macro_id=str(macro.get("id", "")),
         )
         if not dialog.exec():
             return
@@ -893,6 +1018,8 @@ class MacrosPage(QWidget):
             macro["steps"][index],
             self,
             watch_bounds=self.current_watch_bounds(macro),
+            macro_choices=self.context.projects.data.get("macros", []),
+            current_macro_id=str(macro.get("id", "")),
         )
         if dialog.exec():
             updated_step = dialog.result_step()
@@ -931,15 +1058,7 @@ class MacrosPage(QWidget):
         step_number = index + 1
         references: list[int] = []
         for source_index, step in enumerate(macro["steps"]):
-            try:
-                if step.get("action") == "WAIT_FOR_ANY_OBJECT":
-                    targets = destination_steps(step.get("target_steps", []))
-                elif step.get("action") in {"GOTO_STEP", "REPEAT"}:
-                    targets = [int(step.get("target_step", 0))]
-                else:
-                    targets = []
-            except (TypeError, ValueError):
-                targets = []
+            targets = step_destinations(step)
             if step_number in targets:
                 references.append(source_index + 1)
         message = f"Delete step {step_number}?"
@@ -1121,9 +1240,24 @@ class MacrosPage(QWidget):
                 if step.get("enabled", True)
             ]
         )
-        needs_detection = any(
-            step_needs_detection(step) for step in active_steps
-        )
+        needs_detection = any(step_needs_detection(step) for step in active_steps)
+        if not needs_detection and any(
+            step.get("action") == "CALL_MACRO" for step in active_steps
+        ):
+            # The worker recursively checks only the called dependency chain.
+            macro_library = self.context.projects.data.get("macros", [])
+            probe = MacroWorker(
+                deepcopy(macro),
+                path,
+                macro_library=deepcopy(macro_library),
+            )
+            if single_step is not None:
+                called = find_macro_reference(active_steps[0], macro_library)
+                needs_detection = bool(
+                    called and probe._macro_needs_detection(called)
+                )
+            else:
+                needs_detection = probe._macro_needs_detection(macro)
         if needs_detection and not path:
             QMessageBox.information(
                 self,
@@ -1144,6 +1278,9 @@ class MacrosPage(QWidget):
             monitor_index=monitor_index,
             one_loop=one_loop,
             detection_region=deepcopy(macro.get("detection_region")),
+            macro_library=deepcopy(
+                self.context.projects.data.get("macros", [])
+            ),
         )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
@@ -1265,8 +1402,14 @@ class MacrosPage(QWidget):
         action = step.get("action", "").replace("_", " ")
         name = str(step.get("name", "")).strip()
         label = f"{name} · {action}" if name else action
+        runtime_macro = str(step.get("_runtime_macro_name", "")).strip()
+        prefix = (
+            f"{runtime_macro} · "
+            if int(step.get("_runtime_depth", 0)) > 0
+            else ""
+        )
         self.debug.setText(
-            f"Current step {index + 1}: {label}\nNext action is shown above. "
+            f"Current {prefix}step {index + 1}: {label}\nNext action is shown above. "
             "Elapsed execution is in the log."
         )
         self.status_overlay.set_step(index, step)

@@ -86,15 +86,32 @@ class ProjectManager:
             ("settings", {}),
         ):
             self.data.setdefault(key, default)
+        self.ensure_macro_ids()
 
     def save(self) -> None:
         if not self.is_open:
             raise ProjectError("No project is open.")
         assert self.data is not None
+        self.ensure_macro_ids()
         self.data["updated_at"] = utc_now()
         temp = self.project_file.with_suffix(".tmp")
         temp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
         temp.replace(self.project_file)
+
+    def ensure_macro_ids(self) -> bool:
+        """Give legacy macros stable identities for reusable-macro references."""
+        if not self.data:
+            return False
+        changed = False
+        seen: set[str] = set()
+        for macro in self.data.get("macros", []):
+            current = str(macro.get("id", "")).strip()
+            if not current or current in seen:
+                current = str(uuid.uuid4())
+                macro["id"] = current
+                changed = True
+            seen.add(current)
+        return changed
 
     def path(self, relative: str) -> Path:
         if self.root is None:
@@ -184,6 +201,48 @@ class ProjectManager:
                         pass
             self.data["screenshots"].remove(target)
             self.save()
+
+    def add_annotations(
+        self, shot_id: str, annotations: list[dict[str, Any]]
+    ) -> int:
+        """Add approved model suggestions to an existing capture and create crops."""
+        if not self.data or self.root is None:
+            raise ProjectError("Open a project first.")
+        shot = next(
+            (item for item in self.data["screenshots"] if item.get("id") == shot_id),
+            None,
+        )
+        if shot is None:
+            raise ProjectError("That screenshot is no longer available.")
+        image_path = self.path(shot["image"])
+        from PIL import Image
+
+        added = 0
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
+            for annotation in annotations:
+                class_name = self.add_class(str(annotation.get("class_name", "")))
+                bbox = [int(value) for value in annotation.get("bbox", [])]
+                if len(bbox) != 4:
+                    continue
+                x, y, width, height = bbox
+                x = max(0, min(x, image.width - 1))
+                y = max(0, min(y, image.height - 1))
+                width = max(1, min(width, image.width - x))
+                height = max(1, min(height, image.height - y))
+                saved = {"class_name": class_name, "bbox": [x, y, width, height]}
+                shot.setdefault("annotations", []).append(saved)
+                crop_index = len(shot.setdefault("crops", []))
+                crop_rel = (
+                    f"crops/{shot_id}_{crop_index}_{safe_name(class_name)}.png"
+                )
+                image.crop((x, y, x + width, y + height)).save(
+                    self.path(crop_rel)
+                )
+                shot["crops"].append(crop_rel)
+                added += 1
+        self.save()
+        return added
 
     def rename(self, name: str) -> None:
         if not self.is_open or self.data is None:

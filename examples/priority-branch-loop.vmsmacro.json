@@ -1,10 +1,11 @@
 {
   "format": "vision-macro-studio/macro",
-  "format_version": 2,
-  "app_version": "0.1.18",
+  "format_version": 3,
+  "app_version": "0.2.0",
   "exported_at": "2026-09-07T00:00:00+00:00",
   "screen_layout": [],
   "macro": {
+    "id": "example-priority-branch-loop",
     "name": "Priority Branch Loop (Example)",
     "time_limit_minutes": 15,
     "monitor_index": 0,
@@ -71,5 +72,6 @@
         "comment": "Return to the first executable step below the section divider."
       }
     ]
-  }
+  },
+  "dependencies": []
 }

@@ -6,10 +6,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QDialog,
     QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
+    QDoubleSpinBox,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -20,6 +22,14 @@ from PySide6.QtWidgets import (
 from app.core.context import AppContext
 from app.gui.widgets import page_header, pil_to_pixmap
 from app.vision.dataset import automatic_split, class_counts, quality_warnings
+from app.gui.dataset_quality_dialog import DatasetQualityDialog
+from app.gui.label_suggestions_dialog import LabelSuggestionsDialog
+from app.vision.assistant import (
+    dataset_quality_rows,
+    merge_label_suggestions,
+    near_duplicate_pairs,
+)
+from app.vision.detector import Detector
 
 
 class DatasetPage(QWidget):
@@ -63,6 +73,30 @@ class DatasetPage(QWidget):
             controls.addWidget(button)
         controls.addStretch()
         layout.addLayout(controls)
+
+        assistant_bar = QHBoxLayout()
+        quality = QPushButton("QUALITY DASHBOARD")
+        quality.setToolTip(
+            "Review per-class coverage, average box sizes, screen-location variety, "
+            "and near-duplicate screenshots."
+        )
+        quality.clicked.connect(self.show_quality_dashboard)
+        assistant_bar.addWidget(quality)
+        assistant_bar.addStretch()
+        assistant_bar.addWidget(QLabel("Suggestion confidence"))
+        self.suggestion_confidence = QDoubleSpinBox()
+        self.suggestion_confidence.setRange(0.05, 0.99)
+        self.suggestion_confidence.setSingleStep(0.05)
+        self.suggestion_confidence.setValue(0.35)
+        assistant_bar.addWidget(self.suggestion_confidence)
+        suggest = QPushButton("SUGGEST LABELS")
+        suggest.setObjectName("Primary")
+        suggest.setToolTip(
+            "Use the accepted model to propose additional boxes on the selected screenshot. You approve each box before saving."
+        )
+        suggest.clicked.connect(self.suggest_labels)
+        assistant_bar.addWidget(suggest)
+        layout.addLayout(assistant_bar)
         self.class_table = QTableWidget(0, 4)
         self.class_table.setHorizontalHeaderLabels(
             ["Object class", "Examples", "Training images", "Validation images"]
@@ -250,3 +284,91 @@ class DatasetPage(QWidget):
         dialog.setWindowTitle("Capture Preview")
         dialog.layout().addWidget(preview, 0, 0, 1, dialog.layout().columnCount())
         dialog.exec()
+
+    def show_quality_dashboard(self) -> None:
+        project = self.context.projects
+        if not project.data:
+            QMessageBox.information(self, "Open a project", "Open a project first.")
+            return
+        rows = dataset_quality_rows(project)
+        duplicates, truncated = near_duplicate_pairs(project)
+        DatasetQualityDialog(
+            project.data.get("name", "Project"),
+            rows,
+            duplicates,
+            truncated,
+            self,
+        ).exec()
+
+    def suggest_labels(self) -> None:
+        shot_id = self.selected_shot_id()
+        project = self.context.projects
+        if not shot_id or not project.data:
+            QMessageBox.information(
+                self,
+                "Select a capture",
+                "Select one screenshot row before requesting label suggestions.",
+            )
+            return
+        model = next(
+            (
+                item
+                for item in project.data.get("models", [])
+                if item.get("accepted")
+            ),
+            None,
+        )
+        if model is None:
+            QMessageBox.information(
+                self,
+                "Accept a model",
+                "Train and accept a model before requesting label suggestions.",
+            )
+            return
+        model_path = project.path(model["path"])
+        if not model_path.is_file():
+            QMessageBox.warning(
+                self, "Model unavailable", "The accepted model file could not be found."
+            )
+            return
+        shot = next(
+            item for item in project.data["screenshots"] if item["id"] == shot_id
+        )
+        from PIL import Image
+
+        try:
+            image = Image.open(project.path(shot["image"])).convert("RGB")
+            confidence = self.suggestion_confidence.value()
+            detections = Detector(model_path).predict(image, confidence)
+            suggestions = merge_label_suggestions(
+                shot.get("annotations", []),
+                detections,
+                project.data.get("classes", []),
+                minimum_confidence=confidence,
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Suggestions unavailable", f"The model could not analyze this capture: {exc}"
+            )
+            return
+        if not suggestions:
+            QMessageBox.information(
+                self,
+                "No new suggestions",
+                "The model did not find any new, non-duplicate boxes above that confidence. Try a lower threshold or another capture.",
+            )
+            return
+        dialog = LabelSuggestionsDialog(image, suggestions, model["name"], self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        selected = dialog.selected_annotations()
+        if not selected:
+            return
+        added = project.add_annotations(shot_id, selected)
+        self.context.dataset_changed.emit()
+        self.context.log(
+            f"Accepted {added} model-suggested label(s) for capture {shot_id}."
+        )
+        QMessageBox.information(
+            self, "Labels added", f"Added {added} approved label(s) to the capture."
+        )

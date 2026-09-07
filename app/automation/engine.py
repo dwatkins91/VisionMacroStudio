@@ -14,6 +14,8 @@ from app.automation.control import (
     randomized_point,
     randomized_seconds,
 )
+from app.automation.flow import compare_values, number_value, parse_value
+from app.automation.macro_io import find_macro_reference
 from app.automation.coordinates import (
     detection_region_label,
     resolve_step_coordinate,
@@ -61,6 +63,7 @@ class MacroWorker(QObject):
         monitor_index: int = 0,
         one_loop: bool = False,
         detection_region: dict[str, float] | None = None,
+        macro_library: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__()
         self.macro = macro
@@ -70,6 +73,7 @@ class MacroWorker(QObject):
         self.monitor_index = max(0, int(monitor_index))
         self.one_loop = bool(one_loop)
         self.detection_region = dict(detection_region) if detection_region else None
+        self.macro_library = list(macro_library or [macro])
         self.stop_event = threading.Event()
         self._deadline: float | None = None
         self._ended_by_time_limit = False
@@ -77,6 +81,9 @@ class MacroWorker(QObject):
         self._mouse = None
         self._keyboard = None
         self._recent_detection_clicks: list[dict[str, Any]] = []
+        self._last_wait_failed = False
+        self.variables: dict[str, Any] = {}
+        self._active_macro_calls: list[tuple[str, str]] = []
 
     def _decision(self, message: str) -> None:
         self.log.emit(message)
@@ -192,8 +199,16 @@ class MacroWorker(QObject):
 
     def _wait_limit_reached(self, step: dict, message: str) -> bool:
         behavior = step.get("on_timeout", "stop")
-        if behavior == "continue":
-            self._decision(message + " Timeout behavior is Continue.")
+        if behavior in {"continue", "go_to_step"}:
+            self._last_wait_failed = True
+            if behavior == "go_to_step":
+                destination = int(step.get("failure_step", 0))
+                self._decision(
+                    message
+                    + f" Failure behavior is Go to step {destination}."
+                )
+            else:
+                self._decision(message + " Timeout behavior is Continue.")
             return True
         raise TimeoutError(message)
 
@@ -568,6 +583,22 @@ class MacroWorker(QObject):
             wait_seconds = randomized_seconds(wait_min, wait_max)
             self.log.emit(f"Waiting {wait_seconds:.2f} seconds.")
             self._interruptible_sleep(wait_seconds)
+        elif action == "SET_VARIABLE":
+            name = str(step.get("variable", "")).strip()
+            value = parse_value(step.get("variable_value", "0"))
+            self.variables[name] = value
+            self._decision(f"VARIABLE — {name} = {value!r}.")
+        elif action == "ADD_VARIABLE":
+            name = str(step.get("variable", "")).strip()
+            current = number_value(self.variables.get(name, 0))
+            amount = number_value(step.get("amount", 1))
+            updated: int | float = current + amount
+            if float(updated).is_integer():
+                updated = int(updated)
+            self.variables[name] = updated
+            self._decision(
+                f"VARIABLE — {name} changed by {amount:g}; current value is {updated}."
+            )
         elif action == "MOVE_MOUSE":
             target_x, target_y, basis = resolve_step_coordinate(
                 step, monitor_bounds(self.monitor_index)
@@ -621,6 +652,227 @@ class MacroWorker(QObject):
             )
         return target_step - 1
 
+    @staticmethod
+    def _macro_identity(macro: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(macro.get("id", "")).strip(),
+            str(macro.get("name", "Untitled")).strip().casefold(),
+        )
+
+    def _macro_needs_detection(
+        self, macro: dict[str, Any], seen: set[tuple[str, str]] | None = None
+    ) -> bool:
+        visited = seen or set()
+        identity = self._macro_identity(macro)
+        if identity in visited:
+            return False
+        visited.add(identity)
+        for step in macro.get("steps", []):
+            if not step.get("enabled", True):
+                continue
+            if step.get("action") in DETECTION_ACTIONS:
+                return True
+            if step.get("action") == "CALL_MACRO":
+                target = find_macro_reference(step, self.macro_library)
+                if target is not None and self._macro_needs_detection(target, visited):
+                    return True
+        return False
+
+    def _runtime_step(
+        self, step: dict[str, Any], macro: dict[str, Any], depth: int
+    ) -> dict[str, Any]:
+        runtime_step = dict(step)
+        runtime_step["_runtime_macro_name"] = str(macro.get("name", "Untitled"))
+        runtime_step["_runtime_depth"] = depth
+        return runtime_step
+
+    def _execute_program(
+        self,
+        macro: dict[str, Any],
+        detector: Detector | None,
+        *,
+        depth: int = 0,
+        root: bool = False,
+        selected_step: int | None = None,
+    ) -> str:
+        if depth > 20:
+            raise RuntimeError("Reusable macros exceeded the maximum call depth of 20.")
+        identity = self._macro_identity(macro)
+        if identity in self._active_macro_calls:
+            chain = " → ".join(name or identifier for identifier, name in self._active_macro_calls)
+            raise RuntimeError(
+                f"Recursive reusable-macro call detected: {chain} → {macro.get('name', 'Untitled')}."
+            )
+        self._active_macro_calls.append(identity)
+        try:
+            steps = macro.get("steps", [])
+            if selected_step is not None and not 0 <= selected_step < len(steps):
+                raise RuntimeError("Select a step to run.")
+            repeat_counts: dict[int, int] = {}
+            index = selected_step if selected_step is not None else 0
+            while index < len(steps) and not self._check_time_limit():
+                step = steps[index]
+                if selected_step is None and not step.get("enabled", True):
+                    index += 1
+                    continue
+                runtime_step = self._runtime_step(step, macro, depth)
+                self.current_step.emit(index, runtime_step)
+                action = step.get("action", "")
+                action_label = action.replace("_", " ").title()
+                step_name = str(step.get("name", "")).strip()
+                prefix = (
+                    f"{macro.get('name', 'Untitled')} · " if depth > 0 else ""
+                )
+                if step_name:
+                    self.log.emit(
+                        f"{prefix}Step {index + 1} — {step_name}: {action_label}"
+                    )
+                else:
+                    self.log.emit(f"{prefix}Step {index + 1}: {action_label}")
+                self._last_wait_failed = False
+
+                if action == "WAIT_FOR_ANY_OBJECT":
+                    names = object_names(step.get("objects", []))
+                    targets = destination_steps(step.get("target_steps", []))
+                    if len(names) != len(targets):
+                        raise RuntimeError(
+                            "Wait For Any Object needs one destination step per object."
+                        )
+                    matched, found, _origin = self._wait_for_any(detector, step)
+                    route = 0
+                    detail = ""
+                    if matched is not None and found is not None:
+                        route = targets[names.index(matched)]
+                        detail = self._detection_description(matched, found) + " "
+                    elif self._last_wait_failed and step.get("on_timeout") == "go_to_step":
+                        route = int(step.get("failure_step", 0))
+                    if route:
+                        if selected_step is not None:
+                            self._decision(
+                                detail
+                                + f"DECISION — Would branch to step {route}; "
+                                "selected-step live testing will not jump."
+                            )
+                        elif root and self.one_loop and route == 1:
+                            self._decision(
+                                detail
+                                + "DECISION — Would branch to step 1; one-loop run is complete."
+                            )
+                            return "one_loop"
+                        else:
+                            self._decision(
+                                detail + f"DECISION — Branching to step {route}."
+                            )
+                            index = self._jump_index(route, len(steps), index)
+                            continue
+                    elif matched is not None and found is not None:
+                        self._decision(
+                            detail + "DECISION — Continuing to the next step."
+                        )
+                elif action == "GOTO_STEP":
+                    target = int(step.get("target_step", 1))
+                    if selected_step is not None:
+                        self._decision(
+                            f"DECISION — Go To Step would jump to step {target}; "
+                            "selected-step live testing will not jump."
+                        )
+                    elif root and self.one_loop and target == 1:
+                        self._decision(
+                            "DECISION — Go To Step would return to step 1; "
+                            "one-loop run is complete."
+                        )
+                        return "one_loop"
+                    else:
+                        self._decision(f"DECISION — Going to step {target}.")
+                        self._interruptible_sleep(0.01)
+                        index = self._jump_index(target, len(steps), index)
+                        continue
+                elif action == "REPEAT":
+                    count = max(1, int(step.get("count", 1)))
+                    done = repeat_counts.get(index, 0)
+                    target = int(step.get("target_step", 1))
+                    if selected_step is not None:
+                        self._decision(
+                            "DECISION — Repeat branching is skipped during selected-step live testing."
+                        )
+                    elif root and self.one_loop and target == 1:
+                        self._decision(
+                            "DECISION — Repeat would return to step 1; "
+                            "one-loop run is complete."
+                        )
+                        return "one_loop"
+                    elif done < count:
+                        repeat_counts[index] = done + 1
+                        self._decision(
+                            f"DECISION — Repeat {done + 1} of {count}: returning to step {target}."
+                        )
+                        index = self._jump_index(target, len(steps), index)
+                        continue
+                    else:
+                        repeat_counts.pop(index, None)
+                        self._decision(
+                            "DECISION — Repeat count completed; continuing."
+                        )
+                elif action == "IF_VARIABLE":
+                    name = str(step.get("variable", "")).strip()
+                    actual = self.variables.get(name, 0)
+                    operator = str(step.get("comparison", "=="))
+                    expected = step.get("compare_value", "0")
+                    passed = compare_values(actual, operator, expected)
+                    target = int(
+                        step.get("true_step" if passed else "false_step", 0)
+                    )
+                    result_label = "true" if passed else "false"
+                    route_label = "next step" if target == 0 else f"step {target}"
+                    self._decision(
+                        f"VARIABLE — {name} is {actual!r}; {name} {operator} "
+                        f"{parse_value(expected)!r} is {result_label}. Going to {route_label}."
+                    )
+                    if target and selected_step is None:
+                        if root and self.one_loop and target == 1:
+                            return "one_loop"
+                        index = self._jump_index(target, len(steps), index)
+                        continue
+                elif action == "CALL_MACRO":
+                    target_macro = find_macro_reference(step, self.macro_library)
+                    if target_macro is None:
+                        requested = step.get("macro_name") or step.get("macro_id")
+                        raise RuntimeError(
+                            f"Reusable macro {requested!r} is not available in this project."
+                        )
+                    self._decision(
+                        f"SUBMACRO — Entering {target_macro.get('name', 'Untitled')}."
+                    )
+                    status = self._execute_program(
+                        target_macro, detector, depth=depth + 1, root=False
+                    )
+                    if status == "stopped":
+                        return status
+                    self._decision(
+                        f"SUBMACRO — Returned from {target_macro.get('name', 'Untitled')}."
+                    )
+                else:
+                    self._execute_step(detector, step)
+                    if (
+                        self._last_wait_failed
+                        and step.get("on_timeout") == "go_to_step"
+                        and selected_step is None
+                    ):
+                        target = int(step.get("failure_step", 0))
+                        if root and self.one_loop and target == 1:
+                            return "one_loop"
+                        self._decision(
+                            f"DECISION — Detection failed; branching to step {target}."
+                        )
+                        index = self._jump_index(target, len(steps), index)
+                        continue
+                index += 1
+                if selected_step is not None:
+                    break
+            return "stopped" if self.stop_event.is_set() else "completed"
+        finally:
+            self._active_macro_calls.pop()
+
     @Slot()
     def run(self) -> None:
         try:
@@ -631,18 +883,18 @@ class MacroWorker(QObject):
             if self.time_limit_seconds > 0:
                 self._deadline = time.monotonic() + self.time_limit_seconds
             source_steps = self.macro.get("steps", [])
-            steps = source_steps
+            if self.single_step is not None and not 0 <= self.single_step < len(source_steps):
+                raise RuntimeError("Select a step to run.")
             if self.single_step is not None:
-                if self.single_step < 0 or self.single_step >= len(source_steps):
-                    raise RuntimeError("Select a step to run.")
-            active_steps = (
-                [source_steps[self.single_step]]
-                if self.single_step is not None
-                else [step for step in steps if step.get("enabled", True)]
-            )
-            needs_detection = any(
-                step.get("action") in DETECTION_ACTIONS for step in active_steps
-            )
+                selected = source_steps[self.single_step]
+                needs_detection = selected.get("action") in DETECTION_ACTIONS
+                if selected.get("action") == "CALL_MACRO":
+                    called = find_macro_reference(selected, self.macro_library)
+                    needs_detection = bool(
+                        called and self._macro_needs_detection(called)
+                    )
+            else:
+                needs_detection = self._macro_needs_detection(self.macro)
             if needs_detection and not self.model_path:
                 raise RuntimeError(
                     "This macro uses object detection, but no model is available."
@@ -675,109 +927,13 @@ class MacroWorker(QObject):
                     f"Automatic stop is set for {self.time_limit_seconds / 60:g} minute(s)."
                 )
             detector = Detector(self.model_path) if needs_detection else None
-            repeat_counts: dict[int, int] = {}
-            index = self.single_step if self.single_step is not None else 0
-            one_loop_finished = False
-            while index < len(steps) and not self._check_time_limit():
-                step = steps[index]
-                if self.single_step is None and not step.get("enabled", True):
-                    index += 1
-                    continue
-                self.current_step.emit(index, step)
-                action = step.get("action", "")
-                action_label = action.replace("_", " ").title()
-                step_name = str(step.get("name", "")).strip()
-                if step_name:
-                    self.log.emit(
-                        f"Step {index + 1} — {step_name}: {action_label}"
-                    )
-                else:
-                    self.log.emit(f"Step {index + 1}: {action_label}")
-                if action == "WAIT_FOR_ANY_OBJECT":
-                    names = object_names(step.get("objects", []))
-                    targets = destination_steps(step.get("target_steps", []))
-                    if len(names) != len(targets):
-                        raise RuntimeError(
-                            "Wait For Any Object needs one destination step per object."
-                        )
-                    matched, found, _origin = self._wait_for_any(detector, step)
-                    if matched is not None and found is not None:
-                        route = targets[names.index(matched)]
-                        detail = self._detection_description(matched, found)
-                        if route == 0:
-                            self._decision(
-                                detail + " DECISION — Continuing to the next step."
-                            )
-                        elif self.single_step is not None:
-                            self._decision(
-                                detail
-                                + f" DECISION — Would branch to step {route}; "
-                                "selected-step live testing will not jump."
-                            )
-                        elif self.one_loop and route == 1:
-                            self._decision(
-                                detail
-                                + " DECISION — Would branch to step 1; one-loop run is complete."
-                            )
-                            one_loop_finished = True
-                            break
-                        else:
-                            self._decision(
-                                detail + f" DECISION — Branching to step {route}."
-                            )
-                            index = self._jump_index(route, len(steps), index)
-                            continue
-                elif action == "GOTO_STEP":
-                    target = int(step.get("target_step", 1))
-                    if self.single_step is not None:
-                        self._decision(
-                            f"DECISION — Go To Step would jump to step {target}; "
-                            "selected-step live testing will not jump."
-                        )
-                    elif self.one_loop and target == 1:
-                        self._decision(
-                            "DECISION — Go To Step would return to step 1; "
-                            "one-loop run is complete."
-                        )
-                        one_loop_finished = True
-                        break
-                    else:
-                        self._decision(f"DECISION — Going to step {target}.")
-                        self._interruptible_sleep(0.01)
-                        index = self._jump_index(target, len(steps), index)
-                        continue
-                elif action == "REPEAT":
-                    count = max(1, int(step.get("count", 1)))
-                    done = repeat_counts.get(index, 0)
-                    if self.single_step is not None:
-                        self._decision(
-                            "DECISION — Repeat branching is skipped during selected-step live testing."
-                        )
-                    elif self.one_loop and int(step.get("target_step", 1)) == 1:
-                        self._decision(
-                            "DECISION — Repeat would return to step 1; "
-                            "one-loop run is complete."
-                        )
-                        one_loop_finished = True
-                        break
-                    elif done < count:
-                        repeat_counts[index] = done + 1
-                        target = int(step.get("target_step", 1))
-                        self._decision(
-                            f"DECISION — Repeat {done + 1} of {count}: returning to step {target}."
-                        )
-                        index = self._jump_index(target, len(steps), index)
-                        continue
-                    else:
-                        repeat_counts.pop(index, None)
-                        self._decision(
-                            "DECISION — Repeat count completed; continuing."
-                        )
-                else:
-                    self._execute_step(detector, step)
-                index += 1
-                if self.single_step is not None:
-                    break
+            self.variables.clear()
+            status = self._execute_program(
+                self.macro,
+                detector,
+                root=True,
+                selected_step=self.single_step,
+            )
             if self.stop_event.is_set():
                 if self._ended_by_time_limit:
                     self.log.emit("Macro stopped automatically at its time limit.")
@@ -785,7 +941,7 @@ class MacroWorker(QObject):
                     self.log.emit("Macro stopped.")
                 self.stopped.emit()
             else:
-                if one_loop_finished:
+                if status == "one_loop":
                     self.log.emit("One-loop run completed before returning to step 1.")
                 elif self.single_step is not None:
                     self.log.emit(

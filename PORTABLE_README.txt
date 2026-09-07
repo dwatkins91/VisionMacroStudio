@@ -35,6 +35,16 @@ Section creates a colored divider. Validate Macro checks missing classes,
 broken or disabled destinations, unreachable steps, and unbounded loops before
 a full run.
 
+Visual macro logic: Flow View draws connected branches and loops. Run-scoped
+variables and counters can control true/false routes. Call Macro runs another
+project macro and returns, while detection failures can branch to a chosen
+recovery step. Exported format-v3 macros bundle called submacros.
+
+Training assistant: Dataset can propose labels from the accepted model, but
+you approve every box before saving. Quality Dashboard reports coverage and
+near duplicates. New models preserve per-class metrics, notes, confusion
+matrices, and training curves for comparison in Model Library.
+
 This is an unsigned experimental build. Windows may warn about software that
 does not have an established reputation. Confirm that the ZIP came directly
 from the person you trust before opening it.

@@ -46,8 +46,12 @@ def _timeout_description(step: dict[str, Any]) -> str:
         value = f"{minimum:g} second(s)"
     else:
         value = f"a random {minimum:g}–{maximum:g} seconds"
-    behavior = str(step.get("on_timeout", "stop")).replace("_", " ")
-    return f"The live step waits {value}, then will {behavior}."
+    behavior = str(step.get("on_timeout", "stop"))
+    if behavior == "go_to_step":
+        behavior_text = f"go to step {int(step.get('failure_step', 0))}"
+    else:
+        behavior_text = behavior.replace("_", " ")
+    return f"The live step waits {value}, then will {behavior_text}."
 
 
 def _visible_description(detections: list[dict[str, Any]]) -> str:
@@ -316,6 +320,32 @@ def analyze_step(
         target = int(step.get("target_step", 1))
         count = max(1, int(step.get("count", 1)))
         decision = f"PREVIEW — would repeat from step {target} up to {count} time(s)."
+    elif action == "SET_VARIABLE":
+        decision = (
+            f"PREVIEW — would set variable {step.get('variable', '')!r} to "
+            f"{step.get('variable_value', '0')!r}, then continue to {next_label}."
+        )
+    elif action == "ADD_VARIABLE":
+        decision = (
+            f"PREVIEW — would add {step.get('amount', 1)} to counter "
+            f"{step.get('variable', '')!r}, then continue to {next_label}."
+        )
+    elif action == "IF_VARIABLE":
+        true_target = int(step.get("true_step", 0))
+        false_target = int(step.get("false_step", 0))
+        true_label = next_label if true_target == 0 else f"step {true_target}"
+        false_label = next_label if false_target == 0 else f"step {false_target}"
+        decision = (
+            f"PREVIEW — at runtime, if {step.get('variable', '')} "
+            f"{step.get('comparison', '==')} {step.get('compare_value', '0')}, "
+            f"go to {true_label}; otherwise go to {false_label}."
+        )
+    elif action == "CALL_MACRO":
+        called = step.get("macro_name") or step.get("macro_id") or "Unknown"
+        decision = (
+            f"PREVIEW — would run reusable macro {called!r}, then return to "
+            f"{next_label}. No called steps were executed during safe preview."
+        )
     elif action == "STOP":
         decision = "PREVIEW — would stop the macro."
     else:

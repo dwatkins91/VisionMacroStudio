@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.1.18</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
+  <strong>Current version: 0.2.0</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
 </p>
 
 ![Vision Macro Studio training page](docs/images/training-page.png)
@@ -37,11 +37,11 @@ The application uses:
 | Area | Capabilities |
 | --- | --- |
 | Capture | Global-hotkey capture, multi-monitor support, multiple labeled boxes per screenshot |
-| Dataset | Class management, capture preview, train/validation splitting, quality warnings |
-| Training | Nano/Small/Medium YOLO fine-tuning, CPU/GPU selection, model lineage, training from an existing model |
+| Dataset | Class management, assisted labeling, capture preview, train/validation splitting, quality dashboard, and near-duplicate detection |
+| Training | Nano/Small/Medium YOLO fine-tuning, CPU/GPU selection, model lineage, training from an existing model, per-class metrics, and saved reports |
 | Testing | Saved-image and live-screen inference with confidence, FPS, and timing feedback |
-| Models | Versioned model library with explicit acceptance and mAP50 reporting |
-| Macros | Named steps, section dividers, drag reordering, validation, detection regions, stable confirmations, object clicks, conditional branches, loops, portable coordinates, random timing, and offsets |
+| Models | Versioned library with explicit acceptance, notes, overall/per-class comparisons, best-score identification, and confusion/training reports |
+| Macros | Connected flow view, variables, counters, reusable submacros, failure branches, named steps, sections, drag reordering, validation, stable detection, and portable coordinates |
 | Usability | Safe step debugger, one-loop runs, coordinate picker, destination-safe editing, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
 | Safety | F12 emergency stop, interruptible waits and mouse travel, and automatic input release |
 
@@ -104,6 +104,12 @@ Refinement creates a new candidate model rather than overwriting the earlier one
 - **Press Key** and **Type Text** provide keyboard actions.
 - **Wait Until Disappears** can pause until a visual state clears.
 - **Section** adds a colored organizational divider and never sends input.
+- **Set Variable** stores a number, true/false value, or text for the current run.
+- **Add Variable** increments or decrements a numeric counter.
+- **If Variable** compares a saved value and follows separate true and false routes.
+- **Call Macro** runs another project macro as a reusable subroutine and then returns.
+
+Detection steps can set **If timeout** to Stop, Continue, or Go to Step. The last option creates an explicit failure branch for missing objects, exhausted check limits, or timed-out waits.
 
 Coordinate actions include **Pick by Click** and **Pick by Hover** tools. Always use Safe Step Preview after moving a macro to another computer.
 
@@ -120,8 +126,35 @@ Choose **Validate Macro** to check:
 - unreachable enabled steps
 - detection steps that can wait forever
 - closed loops without an exit or macro time limit
+- missing, invalid, or recursive reusable-macro calls
+- variables that are checked but never assigned
 
 Validation errors block full and one-loop runs until repaired. Warnings remain advisory, and **Run Selected Step** stays available for focused troubleshooting. Double-click a validation issue to return directly to its row.
+
+## Visual flow, variables, and reusable macros
+
+Choose **Flow View** to open a connected overview of the current macro. Normal movement, detected-object matches, true/false conditions, timeout routes, jumps, repeats, and submacro returns use distinct labeled colors. The flow view is read-only; edit or drag the corresponding rows in the builder.
+
+Variables reset when a macro run starts and are shared with every called submacro during that run. A common counter pattern is:
+
+1. Set `completed_runs` to `0`.
+2. Perform the repeated work.
+3. Add `1` to `completed_runs`.
+4. If `completed_runs >= 5`, branch to banking; otherwise branch back to gathering.
+
+Import [examples/counter-submacro.vmsmacro.json](examples/counter-submacro.vmsmacro.json)
+for a ready-made, input-free example. Its reusable dependency is bundled into the
+same macro file and is imported automatically.
+
+A reusable macro is an ordinary macro designed to finish at the end of its step list. Add **Call Macro** to a parent macro, select the reusable macro, and execution returns to the next parent step when it finishes. A Stop action inside a submacro stops the entire run. Direct and indirect recursive calls are rejected by validation and protected at runtime.
+
+## Training assistant
+
+On **Dataset**, select a saved screenshot and choose **Suggest Labels**. The accepted model proposes additional boxes above the selected confidence. Boxes that overlap an existing annotation of the same class are removed automatically. Review the preview, uncheck mistakes, and choose Apply; no annotation is changed before approval.
+
+Choose **Quality Dashboard** for per-class instances, training/validation image coverage, average box size, position spread, and targeted recommendations. Its Near Duplicates tab identifies visually similar captures for review but never deletes them.
+
+New v0.2.0 training runs save overall and per-class mAP50/mAP50-95 plus available Ultralytics confusion matrices and training curves. On **Models**, choose **Compare Models** for a side-by-side view, **Edit Notes** to record strengths or changes, and **View Training Report** for saved plots. The highest overall mAP50 is marked informationally without changing the accepted model.
 
 ## Regions and portable coordinates
 
@@ -160,7 +193,7 @@ An importable, coordinate-free example is available at [`examples/priority-branc
 
 The Macro Builder exports versioned `.vmsmacro.json` files containing the macro steps, object names, timing, detection region, coordinate bases, offsets, monitor choice, and time limit. Models, screenshots, and dataset images are not included.
 
-Version 0.1.18 continues to export macro format version 2 and import existing format version 1 macros. A macro containing the new Section action requires version 0.1.18 or newer; an older release rejects that unsupported action instead of attempting to run it.
+Version 0.2.0 exports macro format version 3 and continues importing formats 1 and 2. When a macro calls reusable macros, those dependencies are included recursively in the exported file and added during import. Models, screenshots, and datasets remain separate.
 
 Imported macros are validated before being added. The application warns about missing object classes, unavailable monitors, and coordinates that may need verification on a different display layout.
 
@@ -203,7 +236,7 @@ Run the dependency-light smoke test from the repository root:
 py tests\smoke_test.py
 ```
 
-The smoke test covers project persistence, labeled captures, dataset generation, class renaming, model registration and acceptance, macro stability, detection-region cropping, portable-coordinate scaling, destination-preserving builder edits, macro validation, and project ZIP export/import.
+The smoke test covers project persistence, assisted annotations, dataset analysis, model metrics, macro variables, flow edges, bundled submacros, failure branches, stability, regions, portable coordinates, destination-preserving edits, validation, and project ZIP export/import.
 
 To check every Python module for syntax errors:
 
@@ -221,7 +254,7 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.1.18.zip`
+`release\VisionMacroStudio-Portable-v0.2.0.zip`
 
 The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. The resulting binaries are unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
 
@@ -229,9 +262,10 @@ The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Tor
 
 - Detection regions are configured per macro rather than separately for each detection step.
 - Window-relative coordinates do not bring a covered or minimized target window to the foreground.
-- The macro builder uses draggable rows rather than a connected visual flowchart.
+- The connected macro flow view is read-only; editing remains in the draggable row builder.
 - The input recorder stores clicks, key presses, and delays rather than every raw mouse movement.
-- Training charts are produced in the Ultralytics run folder instead of being graphed inside the application.
+- Per-class comparisons and saved training reports are available only for models trained with v0.2.0 or newer.
+- Suggested labels require an accepted model and still need human review; the assistant never retrains or accepts suggestions automatically.
 - GPU acceleration requires compatible NVIDIA hardware and a supported PyTorch installation.
 
 ## Contributing

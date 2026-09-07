@@ -28,6 +28,7 @@ def register_model(
     classes: list[str],
     metrics: dict[str, Any] | None = None,
     training: dict[str, Any] | None = None,
+    reports: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if project.data is None:
         raise RuntimeError("Open a project first.")
@@ -39,6 +40,8 @@ def register_model(
         "classes": classes,
         "metrics": metrics or {},
         "training": training or {},
+        "reports": reports or {},
+        "notes": "",
         "accepted": False,
     }
     project.data["models"].append(record)
@@ -72,6 +75,13 @@ def delete_model(project: ProjectManager, model_id: str) -> None:
         return
     path = project.path(model["path"])
     path.unlink(missing_ok=True)
+    for report in model.get("reports", {}).values():
+        report_path = project.path(str(report))
+        report_path.unlink(missing_ok=True)
+        try:
+            report_path.parent.rmdir()
+        except OSError:
+            pass
     project.data["models"].remove(model)
     project.save()
 
@@ -87,3 +97,18 @@ def preferred_model(project: ProjectManager) -> dict[str, Any] | None:
 
 def resolve_model_path(project: ProjectManager, model: dict[str, Any]) -> Path:
     return project.path(model["path"])
+
+
+def update_model_notes(
+    project: ProjectManager, model_id: str, notes: str
+) -> None:
+    if not project.data:
+        return
+    model = next(
+        (item for item in project.data.get("models", []) if item.get("id") == model_id),
+        None,
+    )
+    if model is None:
+        return
+    model["notes"] = str(notes).strip()[:1000]
+    project.save()

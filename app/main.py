@@ -39,8 +39,15 @@ def portable_self_test(report_path: Path) -> int:
         "yaml",
         "app.automation.coordinates",
         "app.automation.validator",
+        "app.automation.flow",
+        "app.automation.flowchart",
+        "app.vision.assistant",
         "app.gui.region_picker",
         "app.gui.macro_validation_dialog",
+        "app.gui.macro_flow_dialog",
+        "app.gui.label_suggestions_dialog",
+        "app.gui.dataset_quality_dialog",
+        "app.gui.model_comparison_dialog",
     )
     passed = True
     for module_name in modules:

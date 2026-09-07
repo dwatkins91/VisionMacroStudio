@@ -1,3 +1,3 @@
 """Vision Macro Studio application package."""
 
-__version__ = "0.1.18"
+__version__ = "0.2.0"

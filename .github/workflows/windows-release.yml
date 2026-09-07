@@ -64,11 +64,11 @@ jobs:
           }
           $Lines | Set-Content -Encoding ascii release\SHA256SUMS.txt
       - name: Attest portable ZIP provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: release/VisionMacroStudio-Portable-v*.zip
       - name: Attest Setup EXE provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: release/VisionMacroStudio-Setup-v*.exe
       - name: Upload workflow artifact

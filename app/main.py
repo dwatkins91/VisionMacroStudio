@@ -42,12 +42,19 @@ def portable_self_test(report_path: Path) -> int:
         "app.automation.flow",
         "app.automation.flowchart",
         "app.vision.assistant",
+        "app.core.system_check",
+        "app.core.diagnostics",
+        "app.core.crash_reporting",
+        "app.core.sample_project",
         "app.gui.region_picker",
         "app.gui.macro_validation_dialog",
         "app.gui.macro_flow_dialog",
         "app.gui.label_suggestions_dialog",
         "app.gui.dataset_quality_dialog",
         "app.gui.model_comparison_dialog",
+        "app.gui.system_check_dialog",
+        "app.gui.welcome_dialog",
+        "app.gui.about_dialog",
     )
     passed = True
     for module_name in modules:
@@ -103,6 +110,9 @@ def main() -> int:
     app_icon = QIcon(str(icon_path))
     if not app_icon.isNull():
         app.setWindowIcon(app_icon)
+    from app.core.crash_reporting import install_exception_hook
+
+    install_exception_hook()
     try:
         from app.gui.main_window import MainWindow
         from app.gui.styles import APP_STYLE
@@ -114,7 +124,14 @@ def main() -> int:
         window.show()
         return app.exec()
     except Exception as exc:
-        QMessageBox.critical(None, "Vision Macro Studio could not start", str(exc))
+        try:
+            from app.core.crash_reporting import write_crash_report
+
+            report = write_crash_report(type(exc), exc, exc.__traceback__)
+            detail = f"{exc}\n\nA scrubbed local crash report was saved to:\n{report}"
+        except Exception:
+            detail = str(exc)
+        QMessageBox.critical(None, "Vision Macro Studio could not start", detail)
         return 1
 
 

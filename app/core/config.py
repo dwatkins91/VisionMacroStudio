@@ -22,6 +22,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "macro_overlay_y": 24,
     "project_directory": "",
     "model_directory": "",
+    "onboarding_completed": False,
 }
 
 

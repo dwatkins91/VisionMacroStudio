@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/dwatkins91/VisionMacroStudio/security/advisories/new
+    about: Report exploitable security problems privately.
+  - name: User guide
+    url: https://github.com/dwatkins91/VisionMacroStudio/blob/main/docs/USER_GUIDE.md
+    about: Review setup, training, macro, safety, and support guidance.

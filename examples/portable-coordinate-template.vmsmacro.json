@@ -1,0 +1,38 @@
+{
+  "format": "vision-macro-studio/macro",
+  "format_version": 3,
+  "app_version": "0.9.0",
+  "exported_at": "2026-09-07T00:00:00+00:00",
+  "macro": {
+    "id": "example-portable-coordinate-template",
+    "name": "Portable Coordinate Template",
+    "monitor_index": 0,
+    "time_limit_minutes": 1,
+    "steps": [
+      {
+        "enabled": true,
+        "action": "SECTION",
+        "name": "Portable position"
+      },
+      {
+        "enabled": false,
+        "action": "MOVE_MOUSE",
+        "name": "Center of Watch source (disabled)",
+        "comment": "Pick and safe-preview your own location before enabling.",
+        "coordinate_mode": "watch_relative",
+        "relative_x": 0.5,
+        "relative_y": 0.5,
+        "x": 0,
+        "y": 0,
+        "move_duration": 0.35
+      },
+      {
+        "enabled": true,
+        "action": "STOP",
+        "name": "Finished"
+      }
+    ]
+  },
+  "dependencies": [],
+  "screen_layout": []
+}

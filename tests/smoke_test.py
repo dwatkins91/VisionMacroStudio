@@ -6,7 +6,9 @@ Run from the project root with: python tests/smoke_test.py
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import importlib.util
+import json
 import sys
+import zipfile
 from types import ModuleType
 
 from PIL import Image
@@ -66,6 +68,10 @@ from app.vision.assistant import (  # noqa: E402
     merge_label_suggestions,
     near_duplicate_pairs,
 )
+from app.core.diagnostics import create_diagnostic_package, redact_text  # noqa: E402
+from app.core.crash_reporting import write_crash_report  # noqa: E402
+from app.core.sample_project import populate_sample_project, sample_macros  # noqa: E402
+from app.core.system_check import checks_summary, run_system_checks  # noqa: E402
 
 
 def exercise_stability_engine() -> None:
@@ -405,6 +411,7 @@ def main() -> None:
         normalized_region,
         {"left": 0, "top": 0, "width": 2560, "height": 1440},
     ) == {"left": 640, "top": 360, "width": 1280, "height": 720}
+    assert len(sample_macros()) == 3
 
     builder_steps = [
         {
@@ -617,6 +624,13 @@ def main() -> None:
     assert "scaled" in portable_coordinate_report["decision"]
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
+        quick_checks = run_system_checks(
+            root / "check-projects", deep=False, include_display=False
+        )
+        quick_summary = checks_summary(quick_checks)
+        assert quick_summary["checks"]
+        assert any(item.key == "project_data" for item in quick_checks)
+        assert "<EMAIL>" in redact_text("send to person@example.com")
         project = ProjectManager()
         project.create(root, "Smoke Project")
         for index in range(6):
@@ -708,6 +722,59 @@ def main() -> None:
             }
         )
         project.save()
+        diagnostic_macro = {
+            "id": "diagnostic-secret-id",
+            "name": "Diagnostic Redaction Test",
+            "steps": [
+                {
+                    "enabled": True,
+                    "action": "TYPE_TEXT",
+                    "text": "do-not-share-this",
+                    "window_title": "Private Window",
+                }
+            ],
+        }
+        project.data["macros"].append(diagnostic_macro)
+        diagnostic_zip = create_diagnostic_package(
+            root / "diagnostics.zip",
+            config={
+                "project_directory": str(root),
+                "confidence": 0.7,
+                "emergency_stop_hotkey": "<f12>",
+            },
+            project=project,
+            log_text=f"Opened {project.root}\nContact person@example.com",
+            checks=quick_checks,
+        )
+        with zipfile.ZipFile(diagnostic_zip) as diagnostic_archive:
+            diagnostic_names = set(diagnostic_archive.namelist())
+            diagnostic_contents = "\n".join(
+                diagnostic_archive.read(name).decode("utf-8")
+                for name in diagnostic_names
+            )
+        assert diagnostic_names == {
+            "READ_ME_FIRST.txt",
+            "diagnostics.json",
+            "macros.redacted.json",
+            "last_100_log_lines.txt",
+        }
+        assert "do-not-share-this" not in diagnostic_contents
+        assert "Private Window" not in diagnostic_contents
+        assert "person@example.com" not in diagnostic_contents
+        assert str(project.root) not in diagnostic_contents
+        project.data["macros"].remove(diagnostic_macro)
+        project.save()
+        try:
+            raise ValueError("crash report smoke test")
+        except ValueError:
+            crash_path = write_crash_report(*sys.exc_info(), directory=root / "crashes")
+        assert crash_path.is_file()
+        assert "crash report smoke test" in crash_path.read_text(encoding="utf-8")
+        sample_project = ProjectManager()
+        sample_project.create(root, "Sample")
+        populate_sample_project(sample_project)
+        assert len(sample_project.data["macros"]) == 3
+        assert sample_project.data["classes"] == ["Start_Button", "Done_Message"]
         reusable_macro = {
             "id": "submacro-id",
             "name": "Reusable Deposit",

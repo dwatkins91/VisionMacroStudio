@@ -1,0 +1,71 @@
+name: Windows Release Candidate
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+      - name: Set up 64-bit Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+          cache: pip
+      - name: Verify tag and release files
+        shell: pwsh
+        run: |
+          python tools/validate_release.py --tag "${{ github.ref_name }}"
+      - name: Install runtime and build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r build-requirements.txt
+      - name: Run source checks
+        shell: pwsh
+        run: |
+          python -m compileall app tests tools
+          python tests/smoke_test.py
+      - name: Build and self-test portable edition
+        shell: pwsh
+        run: python tools/build_windows_portable.py --no-prompt
+      - name: Create SHA-256 checksum
+        shell: pwsh
+        run: |
+          $Archive = Get-ChildItem release\VisionMacroStudio-Portable-v*.zip | Select-Object -First 1
+          if (-not $Archive) { throw "Portable ZIP was not created." }
+          $Hash = (Get-FileHash -Algorithm SHA256 $Archive.FullName).Hash.ToLowerInvariant()
+          "$Hash  $($Archive.Name)" | Set-Content -Encoding ascii release\SHA256SUMS.txt
+      - name: Attest portable ZIP provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: release/VisionMacroStudio-Portable-v*.zip
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VisionMacroStudio-${{ github.ref_name }}-Windows
+          path: |
+            release/VisionMacroStudio-Portable-v*.zip
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Create or update GitHub pre-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $Tag = "${{ github.ref_name }}"
+          $Exists = gh release view $Tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $Tag --title "Vision Macro Studio $Tag" --notes-file RELEASE_NOTES.md --prerelease
+          }
+          gh release upload $Tag release\VisionMacroStudio-Portable-v*.zip release\SHA256SUMS.txt --clobber

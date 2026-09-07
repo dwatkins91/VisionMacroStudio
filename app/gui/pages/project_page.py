@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
 from app.core.context import AppContext
 from app.core.projects import ProjectError
 from app.gui.widgets import page_header
+from app.core.sample_project import populate_sample_project
 
 
 class ProjectPage(QWidget):
@@ -40,6 +42,7 @@ class ProjectPage(QWidget):
         buttons = QHBoxLayout()
         for text, callback in (
             ("New Project", self.new_project),
+            ("Create Sample", self.create_sample_project),
             ("Open Project", self.open_project),
             ("Rename", self.rename_project),
             ("Export", self.export_project),
@@ -53,8 +56,16 @@ class ProjectPage(QWidget):
         delete.setObjectName("Danger")
         delete.clicked.connect(self.delete_project)
         layout.addWidget(delete, alignment=Qt.AlignLeft)
+        self.storage = QLabel()
+        self.storage.setObjectName("Subtitle")
+        self.storage.setWordWrap(True)
+        layout.addWidget(self.storage)
+        open_storage = QPushButton("Open Project Storage Folder")
+        open_storage.clicked.connect(self.open_storage_folder)
+        layout.addWidget(open_storage, alignment=Qt.AlignLeft)
         layout.addStretch()
         context.project_changed.connect(self.refresh)
+        context.settings_changed.connect(self.refresh)
         self.refresh()
 
     def refresh(self) -> None:
@@ -70,6 +81,11 @@ class ProjectPage(QWidget):
             self.status.setText(
                 "No project is open. Create one to begin capturing objects."
             )
+        self.storage.setText(
+            "Default project storage: "
+            + str(self.context.config.get("project_directory", ""))
+            + "\nCaptures, datasets, models, macros, and logs remain in the selected project folder."
+        )
 
     def new_project(self) -> None:
         name, ok = QInputDialog.getText(self, "New Project", "Project name:")
@@ -95,6 +111,27 @@ class ProjectPage(QWidget):
             self.context.project_changed.emit()
         except ProjectError as exc:
             QMessageBox.critical(self, "Could not open project", str(exc))
+
+    def create_sample_project(self) -> None:
+        parent = Path(self.context.config.get("project_directory"))
+        try:
+            root = self.context.projects.create(parent, "Vision Macro Studio Sample")
+            populate_sample_project(self.context.projects)
+            self.context.log(f"Created built-in sample project: {root}")
+            self.context.project_changed.emit()
+            QMessageBox.information(
+                self,
+                "Sample project created",
+                "Open Macros to explore three examples. The counter tutorial sends no "
+                "mouse or keyboard input. Input steps in the other templates start disabled.",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not create sample project", str(exc))
+
+    def open_storage_folder(self) -> None:
+        folder = Path(self.context.config.get("project_directory", ""))
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def rename_project(self) -> None:
         if not self.context.projects.is_open:

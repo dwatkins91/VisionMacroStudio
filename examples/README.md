@@ -19,3 +19,6 @@ names, a comment, and a colored Section divider introduced in version 0.1.18.
 The counter-submacro example uses macro format version 3. It bundles a reusable
 submacro, sets and increments a counter, and follows a true/false variable
 branch. Importing the one file adds both macros to the open project.
+
+The portable-coordinate template demonstrates a Watch-relative coordinate. Its
+movement step is disabled until you pick, preview, and enable your own location.

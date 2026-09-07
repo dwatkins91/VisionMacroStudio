@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import importlib.util
 import json
 import os
@@ -12,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -22,6 +25,20 @@ WORK_ROOT = BUILD_ROOT / "work"
 RELEASE_ROOT = PROJECT_ROOT / "release"
 APP_FOLDER_NAME = "VisionMacroStudio"
 EXE_NAME = "VisionMacroStudio.exe"
+SOURCE_URL = "https://github.com/dwatkins91/VisionMacroStudio"
+RUNTIME_DISTRIBUTIONS = (
+    "PySide6",
+    "shiboken6",
+    "mss",
+    "pynput",
+    "Pillow",
+    "numpy",
+    "opencv-python",
+    "torch",
+    "torchvision",
+    "ultralytics",
+    "PyYAML",
+)
 
 
 def app_version() -> str:
@@ -183,9 +200,101 @@ def verify_bundle(bundle: Path) -> None:
     print("Packaged self-test passed.")
 
 
+def collect_third_party_licenses(bundle: Path) -> int:
+    target_root = bundle / "THIRD_PARTY_LICENSES"
+    target_root.mkdir(exist_ok=True)
+    copied = 0
+    for distribution_name in RUNTIME_DISTRIBUTIONS:
+        try:
+            distribution = importlib.metadata.distribution(distribution_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        candidates = []
+        for entry in distribution.files or []:
+            filename = Path(str(entry)).name.casefold()
+            if filename.startswith(("license", "copying", "notice", "authors")):
+                candidates.append(entry)
+        for index, entry in enumerate(candidates[:8], start=1):
+            source = Path(distribution.locate_file(entry))
+            try:
+                if not source.is_file() or source.stat().st_size > 2_000_000:
+                    continue
+                safe_distribution = re.sub(
+                    r"[^A-Za-z0-9_.-]+", "_", distribution_name
+                )
+                destination = (
+                    target_root / f"{safe_distribution}-{index}-{source.name}"
+                )
+                shutil.copy2(source, destination)
+                copied += 1
+            except OSError:
+                continue
+    return copied
+
+
+def write_build_info(bundle: Path, third_party_license_files: int) -> None:
+    dependencies = {}
+    for name in RUNTIME_DISTRIBUTIONS:
+        try:
+            dependencies[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            dependencies[name] = "not found"
+    (bundle / "BUILD_INFO.json").write_text(
+        json.dumps(
+            {
+                "application": "Vision Macro Studio",
+                "version": app_version(),
+                "source": f"{SOURCE_URL}/tree/v{app_version()}",
+                "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "python": platform.python_version(),
+                "platform": platform.platform(),
+                "third_party_license_files": third_party_license_files,
+                "dependencies": dependencies,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def verify_release_contents(archive_path: Path) -> None:
+    required = {
+        f"{APP_FOLDER_NAME}/{EXE_NAME}",
+        f"{APP_FOLDER_NAME}/START_HERE.txt",
+        f"{APP_FOLDER_NAME}/LICENSE.txt",
+        f"{APP_FOLDER_NAME}/THIRD_PARTY_NOTICES.txt",
+        f"{APP_FOLDER_NAME}/SOURCE_OFFER.txt",
+        f"{APP_FOLDER_NAME}/PRIVACY.txt",
+        f"{APP_FOLDER_NAME}/BUILD_INFO.json",
+    }
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+    missing = sorted(required - names)
+    if missing:
+        raise RuntimeError("Portable archive is missing: " + ", ".join(missing))
+
+
+def write_checksum(archive_path: Path) -> Path:
+    checksum = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    path = RELEASE_ROOT / "SHA256SUMS.txt"
+    path.write_text(f"{checksum}  {archive_path.name}\n", encoding="ascii")
+    return path
+
+
 def finish_release(bundle: Path, demo_project: Path | None) -> Path:
     shutil.copy2(PROJECT_ROOT / "PORTABLE_README.txt", bundle / "START_HERE.txt")
     shutil.copy2(PROJECT_ROOT / "LICENSE", bundle / "LICENSE.txt")
+    shutil.copy2(
+        PROJECT_ROOT / "THIRD_PARTY_NOTICES.md",
+        bundle / "THIRD_PARTY_NOTICES.txt",
+    )
+    shutil.copy2(PROJECT_ROOT / "SOURCE_OFFER.txt", bundle / "SOURCE_OFFER.txt")
+    shutil.copy2(PROJECT_ROOT / "docs" / "PRIVACY.md", bundle / "PRIVACY.txt")
+    shutil.copy2(
+        PROJECT_ROOT / "docs" / "USER_GUIDE.md", bundle / "USER_GUIDE.txt"
+    )
+    license_count = collect_third_party_licenses(bundle)
+    write_build_info(bundle, license_count)
     if demo_project is not None:
         shutil.copy2(demo_project, bundle / "Demo_Project.zip")
     archive_base = RELEASE_ROOT / f"VisionMacroStudio-Portable-v{app_version()}"
@@ -198,7 +307,10 @@ def finish_release(bundle: Path, demo_project: Path | None) -> Path:
         root_dir=DIST_ROOT,
         base_dir=APP_FOLDER_NAME,
     )
-    return Path(result)
+    archive_path = Path(result)
+    verify_release_contents(archive_path)
+    write_checksum(archive_path)
+    return archive_path
 
 
 def main() -> int:

@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QPlainTextEdit,
     QPushButton,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
 
 from app.core.context import AppContext
 from app.gui.widgets import page_header
+from app.core.diagnostics import create_diagnostic_package
+from app.core.system_check import run_system_checks
 
 
 class LogsPage(QWidget):
@@ -35,8 +39,11 @@ class LogsPage(QWidget):
         save.clicked.connect(self.save_log)
         clear = QPushButton("Clear View")
         clear.clicked.connect(self.text.clear)
+        diagnostic = QPushButton("Create Diagnostic Package")
+        diagnostic.clicked.connect(self.create_diagnostic_package)
         buttons.addWidget(save)
         buttons.addWidget(clear)
+        buttons.addWidget(diagnostic)
         buttons.addStretch()
         layout.addLayout(buttons)
         context.log_message.connect(self.append)
@@ -55,6 +62,37 @@ class LogsPage(QWidget):
             self, "Save Log", default, "Text files (*.txt)"
         )
         if path:
-            from pathlib import Path
-
             Path(path).write_text(self.text.toPlainText(), encoding="utf-8")
+
+    def create_diagnostic_package(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Create Diagnostic Package",
+            f"VisionMacroStudio-Diagnostics-{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+            "ZIP archives (*.zip)",
+        )
+        if not path:
+            return
+        try:
+            checks = self.context.system_checks or run_system_checks(
+                self.context.config.get("project_directory"),
+                deep=False,
+                include_display=False,
+            )
+            result = create_diagnostic_package(
+                Path(path),
+                config=self.context.config.data,
+                project=self.context.projects,
+                log_text=self.text.toPlainText(),
+                checks=checks,
+            )
+            self.context.log(f"Created privacy-safe diagnostic package: {result.name}")
+            QMessageBox.information(
+                self,
+                "Diagnostic package created",
+                "The ZIP excludes captures, model files, project paths, and settings paths. "
+                "Typed text and window titles are redacted. Review the ZIP before attaching "
+                "it to a public GitHub issue.",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Diagnostic package failed", str(exc))

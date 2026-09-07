@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -24,6 +24,10 @@ from app.gui.pages.project_page import ProjectPage
 from app.gui.pages.settings_page import SettingsPage
 from app.gui.pages.testing_page import TestingPage
 from app.gui.pages.training_page import TrainingPage
+from app import __repository_url__, __version__
+from app.gui.about_dialog import AboutDialog
+from app.gui.system_check_dialog import SystemCheckDialog
+from app.gui.welcome_dialog import WelcomeDialog
 
 
 class MainWindow(QMainWindow):
@@ -41,11 +45,12 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Vision Macro Studio")
+        self.setWindowTitle(f"Vision Macro Studio {__version__} RC")
         self.resize(1280, 820)
         self.setMinimumSize(1050, 680)
         self.context = AppContext()
         self.hotkeys = HotkeyService()
+        self._create_menus()
         central = QWidget()
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
@@ -91,6 +96,10 @@ class MainWindow(QMainWindow):
         self.project_label.setObjectName("Subtitle")
         self.project_label.setContentsMargins(12, 8, 12, 4)
         side_layout.addWidget(self.project_label)
+        version_label = QLabel(f"v{__version__} · Release Candidate")
+        version_label.setObjectName("VersionLabel")
+        version_label.setContentsMargins(12, 0, 12, 4)
+        side_layout.addWidget(version_label)
         root.addWidget(sidebar)
         divider_host = QWidget()
         divider_host.setObjectName("DividerHost")
@@ -124,6 +133,41 @@ class MainWindow(QMainWindow):
         self.navigate(0)
         self.update_project_label()
         QTimer.singleShot(0, self.reload_hotkeys)
+        QTimer.singleShot(450, self.show_welcome_if_needed)
+
+    def _create_menus(self) -> None:
+        help_menu = self.menuBar().addMenu("Help")
+        for text, callback in (
+            ("Welcome and First Steps", self.show_welcome),
+            ("Check My Computer", self.show_system_check),
+            ("Open Online User Guide", self.open_user_guide),
+            ("View Releases", self.open_releases),
+            ("About and License", self.show_about),
+        ):
+            action = QAction(text, self)
+            action.triggered.connect(callback)
+            help_menu.addAction(action)
+
+    def show_welcome_if_needed(self) -> None:
+        if not bool(self.context.config.get("onboarding_completed", False)):
+            self.show_welcome()
+
+    def show_welcome(self) -> None:
+        WelcomeDialog(self.context, self).exec()
+
+    def show_system_check(self) -> None:
+        dialog = SystemCheckDialog(self.context, self)
+        dialog.run_checks()
+        dialog.exec()
+
+    def show_about(self) -> None:
+        AboutDialog(self).exec()
+
+    def open_user_guide(self) -> None:
+        QDesktopServices.openUrl(QUrl(f"{__repository_url__}/blob/main/docs/USER_GUIDE.md"))
+
+    def open_releases(self) -> None:
+        QDesktopServices.openUrl(QUrl(f"{__repository_url__}/releases"))
 
     def navigate(self, index: int) -> None:
         self.stack.setCurrentIndex(index)

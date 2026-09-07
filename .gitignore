@@ -17,6 +17,7 @@ htmlcov/
 projects/
 runs/
 logs/
+crashes/
 captures/
 datasets/
 models/
@@ -37,6 +38,7 @@ release/
 .env.*
 !.env.example
 settings.json
+VisionMacroStudio-Diagnostics-*.zip
 
 # Editors and operating systems
 .idea/
@@ -44,4 +46,3 @@ settings.json
 .DS_Store
 Thumbs.db
 desktop.ini
-

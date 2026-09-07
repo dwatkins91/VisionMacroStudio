@@ -1,0 +1,59 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach private captures, models, credentials, or an unreviewed project export. Use Logs → Create Diagnostic Package and review its contents first.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Find this under Help → About and License.
+      placeholder: 0.9.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation
+      options:
+        - GitHub portable ZIP
+        - Source with run_app.bat
+        - Source with manual PowerShell setup
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: Tell us the smallest exact sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: System check and diagnostic details
+      description: Paste non-private failures or attach a diagnostic ZIP only after reviewing it.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed every attachment and removed private or identifying data.
+          required: true

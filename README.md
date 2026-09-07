@@ -9,8 +9,12 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.2.1</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
+  <strong>Current version: 0.9.0 Public Release Candidate</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">AGPL-3.0-or-later</a>
 </p>
+
+![Tests](https://github.com/dwatkins91/VisionMacroStudio/actions/workflows/tests.yml/badge.svg)
+![CodeQL](https://github.com/dwatkins91/VisionMacroStudio/actions/workflows/codeql.yml/badge.svg)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
 ![Vision Macro Studio training page](docs/images/training-page.png)
 
@@ -32,6 +36,9 @@ The application uses:
 > [!IMPORTANT]
 > Vision Macro Studio is an experimental Windows-first project. Automated input can reach the wrong window when the screen changes. Test macros one step at a time and keep the emergency-stop hotkey available.
 
+> [!NOTE]
+> Version 0.9.0 is the public release candidate. The working capture, training, testing, macro, model-assistance, and sharing features are present; clean-machine validation and trusted code signing remain gates for v1.0.0.
+
 ## Highlights
 
 | Area | Capabilities |
@@ -42,8 +49,9 @@ The application uses:
 | Testing | Saved-image and live-screen inference with confidence, FPS, and timing feedback |
 | Models | Versioned library with explicit acceptance, notes, overall/per-class comparisons, best-score identification, and confusion/training reports |
 | Macros | Connected flow view, variables, counters, reusable submacros, failure branches, named steps, sections, drag reordering, validation, stable detection, and portable coordinates |
-| Usability | Safe step debugger, one-loop runs, coordinate picker, destination-safe editing, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
-| Safety | F12 emergency stop, interruptible waits and mouse travel, and automatic input release |
+| Usability | First-run guide, safe sample project, system-readiness check, safe step debugger, one-loop runs, coordinate picker, compact overlay, and per-macro run limit |
+| Support | Privacy-safe diagnostic ZIPs, local crash reports, user guide, validation checklist, and structured GitHub issue forms |
+| Safety | F12 emergency stop, interruptible waits and mouse travel, automatic input release, explicit legal notice, and no telemetry |
 
 ## Quick start on Windows
 
@@ -74,6 +82,12 @@ py -m venv .venv
 ```
 
 Do not disable Windows security protections simply to run this project. Source builds and portable builds are currently unsigned, so Smart App Control or an organizational application-control policy may still block a native dependency. A trusted code-signed distribution is the long-term solution.
+
+At first launch, the Welcome guide explains storage and safety. Run **Help → Check My Computer** to import every required component, verify writable folders, confirm screen access, and report whether CPU or GPU inference is available. The check does not capture, save, or upload the screen.
+
+## Try the built-in sample
+
+Choose **Project → Create Sample** to create three model-free examples. The Safe Counter Tutorial demonstrates variables, conditions, loops, and Flow View without mouse or keyboard input. The detection and portable-coordinate templates keep their input steps disabled until you configure, preview, and deliberately enable them.
 
 ## First project workflow
 
@@ -228,6 +242,8 @@ This repository intentionally excludes:
 - Logs and training runs
 - PyInstaller and portable-build output
 
+Vision Macro Studio has no telemetry, advertising, cloud account, automatic upload, or silent update check. Read the full [privacy and local-data guide](docs/PRIVACY.md). For support, **Logs → Create Diagnostic Package** exports only a scrubbed runtime report, redacted macro structure, and the last 100 visible log lines—never captures or model files. Review every diagnostic ZIP before sharing it.
+
 ## Development and verification
 
 Run the dependency-light smoke test from the repository root:
@@ -242,6 +258,7 @@ To check every Python module for syntax errors:
 
 ```powershell
 py -m compileall app tests tools
+py tools\validate_release.py
 ```
 
 ## Build a portable Windows edition
@@ -254,9 +271,11 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.2.1.zip`
+`release\VisionMacroStudio-Portable-v0.9.0.zip`
 
-The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. The resulting binaries are unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
+The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. It includes the AGPL license, corresponding-source offer, privacy guide, build manifest, third-party notices, available dependency license texts, and `SHA256SUMS.txt`. The resulting binaries remain unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
+
+Pushing an exact version tag runs the Windows release workflow, source tests, packaged self-test, checksum generation, provenance attestation, and GitHub pre-release creation. See [GitHub setup](docs/GITHUB_SETUP.md) and the [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Current limitations
 
@@ -270,7 +289,7 @@ The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Tor
 
 ## Contributing
 
-Bug reports, reproducible test cases, documentation improvements, and focused pull requests are welcome. Please avoid attaching private screen captures, trained models, game account information, credentials, or other personal project data to public issues.
+Bug reports, reproducible test cases, documentation improvements, and focused pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md). Please avoid attaching private screen captures, trained models, game account information, credentials, or other personal project data to public issues.
 
 ## Responsible use
 
@@ -278,4 +297,6 @@ Use Vision Macro Studio only where automation is allowed. Do not use it to bypas
 
 ## License
 
-Vision Macro Studio is available under the [MIT License](LICENSE). Copyright © 2026 Dillard Watkins.
+Vision Macro Studio is free software under the [GNU Affero General Public License version 3 or later](LICENSE). Copyright © 2026 Dillard Watkins. Distributed builds provide the corresponding-source location in [SOURCE_OFFER.txt](SOURCE_OFFER.txt); dependencies retain the licenses listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Versions through v0.2.1 were originally distributed under the MIT License. Version 0.9.0 and later source in this repository is distributed under AGPL-3.0-or-later.

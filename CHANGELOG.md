@@ -5,6 +5,20 @@ All notable changes to Vision Macro Studio are documented here.
 The project is currently in early development. Version numbers below describe
 working snapshots rather than a promise of backward compatibility.
 
+## [0.9.0] - 2026-09-07
+
+- Promoted the working application to a public release candidate and changed the project license from MIT to GNU AGPL-3.0-or-later under Dillard Watkins.
+- Added complete corresponding-source and third-party notices, dependency-license collection for portable builds, and an in-app About/legal notice.
+- Added a three-part first-run welcome covering the end-to-end workflow, automation safety, privacy, and configurable local project storage.
+- Added Check My Computer with real dependency imports, writable-folder and disk-space checks, screen-access verification, and CUDA availability reporting without capturing or uploading the screen.
+- Added a privacy-safe diagnostic ZIP containing safe runtime/settings metadata, accepted-model metadata, redacted macro logic, and the last 100 visible log lines while excluding captures, models, labels, and personal paths.
+- Added scrubbed local crash reports with an actionable recovery message.
+- Added a built-in sample project with three examples, including a fully input-free counter/branch tutorial.
+- Added the public user guide, privacy guide, support and security policies, contribution guide, release checklist, and repository setup instructions.
+- Added structured bug and feature issue forms, pull-request checks, CODEOWNERS, Dependabot configuration, cross-platform smoke tests, and CodeQL analysis.
+- Added tagged Windows release automation with source validation, a packaged self-test, build metadata, SHA-256 checksums, provenance attestation, and automatic GitHub pre-release assets.
+- Kept v0.2.1 projects, models, macros, and format-v1/v2/v3 macro imports compatible.
+
 ## [0.2.1] - 2026-09-07
 
 - Fixed macro drag-and-drop so Qt no longer removes or overwrites a second row after the builder has already reordered the step list.

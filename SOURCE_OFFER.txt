@@ -1,0 +1,19 @@
+VISION MACRO STUDIO — CORRESPONDING SOURCE
+==========================================
+
+Vision Macro Studio is free software licensed under the GNU Affero General
+Public License version 3 or later.
+
+The complete corresponding source for version 0.9.0 is available without
+charge at:
+
+https://github.com/dwatkins91/VisionMacroStudio/tree/v0.9.0
+
+The repository includes the application source, dependency declaration,
+PyInstaller specification, portable-build script, tests, documentation, and
+release workflow needed to study, modify, and rebuild this version.
+
+General repository:
+https://github.com/dwatkins91/VisionMacroStudio
+
+Copyright © 2026 Dillard Watkins

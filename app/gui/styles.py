@@ -18,6 +18,10 @@ QFrame#ContentDivider {
 QLabel#Brand { color: white; font-size: 17pt; font-weight: 700; padding: 18px 12px; }
 QLabel#PageTitle { color: white; font-size: 22pt; font-weight: 700; }
 QLabel#Subtitle { color: #9eabc0; font-size: 10pt; }
+QLabel#VersionLabel { color: #61748f; font-size: 8.5pt; }
+QMenuBar { background: #0d1728; color: #c9d4e5; border-bottom: 1px solid #203452; }
+QMenuBar::item:selected, QMenu::item:selected { background: #203452; color: #55ddb1; }
+QMenu { background: #111c2f; color: #e8eef8; border: 1px solid #2c3d5a; }
 QPushButton { background: #1d2a42; border: 1px solid #334866; border-radius: 7px; padding: 8px 12px; }
 QPushButton:hover { background: #263854; }
 QPushButton:pressed { background: #18243a; }

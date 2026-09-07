@@ -1,6 +1,8 @@
 VISION MACRO STUDIO - PORTABLE WINDOWS EDITION
 ================================================
 
+Version 0.9.0 - Public Release Candidate
+
 1. Extract the complete ZIP to a normal folder.
 2. Open the VisionMacroStudio folder.
 3. Double-click VisionMacroStudio.exe.
@@ -48,3 +50,21 @@ matrices, and training curves for comparison in Model Library.
 This is an unsigned experimental build. Windows may warn about software that
 does not have an established reputation. Confirm that the ZIP came directly
 from the person you trust before opening it.
+
+First launch: complete the Welcome guide, then choose Help > Check My Computer.
+The check imports required components and verifies local access without saving
+or uploading a screenshot. Project > Create Sample provides a safe, model-free
+counter tutorial plus disabled templates for detection and portable positions.
+
+Privacy: captures, datasets, model weights, macros, and logs remain in the
+project folder selected by the current user. The app has no telemetry or silent
+upload. Read PRIVACY.txt before sharing project content or diagnostics.
+
+License and source: Vision Macro Studio is free software under GNU AGPL-3.0 or
+later, Copyright (c) 2026 Dillard Watkins. LICENSE.txt contains the complete
+license. SOURCE_OFFER.txt identifies the exact corresponding source for this
+build. Third-party components retain the terms described in
+THIRD_PARTY_NOTICES.txt and THIRD_PARTY_LICENSES.
+
+Verify the download: compare this ZIP against the SHA-256 value published in
+SHA256SUMS.txt on the same GitHub release.

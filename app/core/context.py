@@ -18,6 +18,7 @@ class AppContext(QObject):
         super().__init__()
         self.config = ConfigManager()
         self.projects = ProjectManager()
+        self.system_checks = []
 
     def log(self, message: str) -> None:
         self.log_message.emit(message)

@@ -29,7 +29,12 @@ from app.automation.coordinates import (  # noqa: E402
     resolve_step_coordinate,
 )
 from app.automation.debugger import analyze_step, step_needs_detection  # noqa: E402
-from app.automation.flow import compare_values, parse_value, step_destinations  # noqa: E402
+from app.automation.flow import (  # noqa: E402
+    compare_values,
+    moved_row_index,
+    parse_value,
+    step_destinations,
+)
 from app.automation.flowchart import flow_edges  # noqa: E402
 from app.automation.macro_io import (  # noqa: E402
     MacroFormatError,
@@ -319,6 +324,11 @@ def main() -> None:
     assert parse_value("true") is True
     assert compare_values("5", ">=", 4)
     assert compare_values("ready", "==", "ready")
+    assert moved_row_index(1, 4, 4) == 3
+    assert moved_row_index(3, 1, 4) == 1
+    assert moved_row_index(0, 0, 4) == 0
+    assert moved_row_index(3, 4, 4) == 3
+    assert moved_row_index(1, 2, 4) == 1
     assert step_destinations(
         {
             "action": "IF_VARIABLE",

@@ -8,8 +8,8 @@ import uuid
 
 import numpy as np
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QBrush, QColor, QFont
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -42,7 +42,7 @@ from app.automation.debugger import (
 )
 from app.automation.engine import MacroWorker
 from app.automation.control import destination_steps, object_names
-from app.automation.flow import step_destinations
+from app.automation.flow import moved_row_index, step_destinations
 from app.automation.macro_io import (
     MacroFormatError,
     delete_step_preserving_destinations,
@@ -73,7 +73,7 @@ from app.vision.model_manager import preferred_model
 
 
 class MacroStepsTable(QTableWidget):
-    """A single-row drag table that leaves data changes to the Macro Builder."""
+    """A single-row drag table with one controlled, non-destructive move."""
 
     row_drop_requested = Signal(int, int)
 
@@ -83,32 +83,105 @@ class MacroStepsTable(QTableWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
+        # The native indicator can highlight the middle of a cell as though the
+        # dragged data will be merged into it. We paint an unambiguous row line.
+        self.setDropIndicatorShown(False)
         self.setDragDropOverwriteMode(False)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self._drag_source_row: int | None = None
+        self._drop_insertion_row: int | None = None
+
+    def startDrag(self, _supported_actions) -> None:
+        indexes = self.selectedIndexes()
+        source = self.currentRow()
+        if source < 0 or not indexes:
+            return
+        mime_data = self.model().mimeData(indexes)
+        if mime_data is None:
+            return
+        self._drag_source_row = source
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        try:
+            # Do not call QAbstractItemView.startDrag: its MoveAction cleanup can
+            # remove a second row after the builder has already reordered data.
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            self._drag_source_row = None
+            self._drop_insertion_row = None
+            self.viewport().update()
+
+    def _insertion_at(self, position) -> int:
+        row = self.indexAt(position).row()
+        if row < 0:
+            return self.rowCount()
+        midpoint = self.rowViewportPosition(row) + self.rowHeight(row) / 2
+        return row + int(position.y() >= midpoint)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.source() is self:
+            event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if event.source() is not self:
+            event.ignore()
+            return
+        self._drop_insertion_row = self._insertion_at(event.position().toPoint())
+        self.viewport().update()
+        event.setDropAction(Qt.DropAction.MoveAction)
+        event.accept()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drop_insertion_row = None
+        self.viewport().update()
+        event.accept()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        insertion = self._drop_insertion_row
+        if insertion is None or self.rowCount() == 0:
+            return
+        if insertion <= 0:
+            y = 1
+        elif insertion >= self.rowCount():
+            last = self.rowCount() - 1
+            y = self.rowViewportPosition(last) + self.rowHeight(last) - 1
+        else:
+            y = self.rowViewportPosition(insertion)
+        painter = QPainter(self.viewport())
+        painter.setPen(QPen(QColor("#28d7a1"), 3))
+        painter.drawLine(0, int(y), self.viewport().width(), int(y))
+        painter.end()
 
     def dropEvent(self, event) -> None:
         if event.source() is not self:
             event.ignore()
             return
-        source = self.currentRow()
-        position = event.position().toPoint()
-        target = self.indexAt(position).row()
-        if target < 0:
-            target = self.rowCount()
-        elif (
-            self.dropIndicatorPosition()
-            == QAbstractItemView.DropIndicatorPosition.BelowItem
-        ):
-            target += 1
-        if target > source:
-            target -= 1
-        target = max(0, min(target, self.rowCount() - 1))
-        if source >= 0 and source != target:
-            self.row_drop_requested.emit(source, target)
+        source = self._drag_source_row
+        if source is None:
+            source = self.currentRow()
+        insertion = self._insertion_at(event.position().toPoint())
+        try:
+            target = moved_row_index(source, insertion, self.rowCount())
+        except IndexError:
+            event.ignore()
+            return
+        self._drop_insertion_row = None
+        self.viewport().update()
         event.setDropAction(Qt.DropAction.MoveAction)
         event.accept()
+        if source >= 0 and source != target:
+            # Rebuild the table after Qt has completely finished the drop event.
+            QTimer.singleShot(
+                0,
+                lambda source_row=source, target_row=target: self.row_drop_requested.emit(
+                    source_row, target_row
+                ),
+            )
 
 
 class StepDebugWorker(QObject):

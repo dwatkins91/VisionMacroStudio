@@ -5,6 +5,13 @@ All notable changes to Vision Macro Studio are documented here.
 The project is currently in early development. Version numbers below describe
 working snapshots rather than a promise of backward compatibility.
 
+## [0.2.1] - 2026-09-07
+
+- Fixed macro drag-and-drop so Qt no longer removes or overwrites a second row after the builder has already reordered the step list.
+- Added a full-width teal insertion line that clearly shows whether a dragged step will be placed above or below a row.
+- Deferred the data reorder until the native drop event finishes, preventing overlapping rows, disappearing steps, and unpredictable results.
+- Added upward, downward, first-row, last-row, and no-op drop-index regression coverage while preserving automatic branch remapping.
+
 ## [0.2.0] - 2026-09-07
 
 - Added a connected, scrollable Macro Flow view with labeled match, true/false, timeout, jump, repeat, and return routes.

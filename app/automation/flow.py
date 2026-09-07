@@ -10,6 +10,16 @@ VARIABLE_ACTIONS = {"SET_VARIABLE", "ADD_VARIABLE", "IF_VARIABLE"}
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 
+def moved_row_index(source_row: int, insertion_row: int, row_count: int) -> int:
+    """Resolve a drop insertion boundary after removing the dragged source row."""
+    if row_count < 1 or not 0 <= source_row < row_count:
+        raise IndexError("The dragged row does not exist.")
+    insertion = max(0, min(int(insertion_row), row_count))
+    if insertion > source_row:
+        insertion -= 1
+    return max(0, min(insertion, row_count - 1))
+
+
 def valid_variable_name(value: Any) -> bool:
     return bool(VARIABLE_NAME_PATTERN.fullmatch(str(value).strip()))
 
@@ -106,4 +116,3 @@ def step_destinations(step: dict[str, Any]) -> list[int]:
         if target != 0:
             destinations.append(target)
     return destinations
-

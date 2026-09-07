@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.2.0</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
+  <strong>Current version: 0.2.1</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
 </p>
 
 ![Vision Macro Studio training page](docs/images/training-page.png)
@@ -117,7 +117,7 @@ Coordinate actions include **Pick by Click** and **Pick by Hover** tools. Always
 
 Every step can have a readable name and comment. Names appear in the builder, live log, and compact overlay, while comments remain visible in the row and Safe Step Preview. **Add Section** inserts a colored divider after the selected row so gathering, waiting, banking, and looping phases remain easy to scan.
 
-Macro rows can be dragged into a new order. Move Up, Move Down, Duplicate, Add Section, and drag-to-reorder automatically recalculate numbered branch destinations so they continue targeting the same logical steps. If a referenced step is deleted, its route is deliberately marked invalid instead of silently redirecting to an unrelated row.
+Macro rows can be dragged into a new order. A teal line marks the exact insertion boundary; releasing above or below that line performs one whole-row move without merging steps. Move Up, Move Down, Duplicate, Add Section, and drag-to-reorder automatically recalculate numbered branch destinations so they continue targeting the same logical steps. If a referenced step is deleted, its route is deliberately marked invalid instead of silently redirecting to an unrelated row.
 
 Choose **Validate Macro** to check:
 
@@ -254,7 +254,7 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.2.0.zip`
+`release\VisionMacroStudio-Portable-v0.2.1.zip`
 
 The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. The resulting binaries are unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
 

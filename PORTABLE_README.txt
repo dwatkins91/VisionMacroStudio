@@ -15,6 +15,10 @@ captures, and macros.
 Safety: F12 is the default emergency stop for a running macro. Only run macros
 against an application and computer you are authorized to control.
 
+Macro debugging: Safe Step Preview inspects one screen frame and explains the
+selected step without sending mouse or keyboard input. Run Selected Step and
+Run One Loop are live tests and can send their configured inputs.
+
 This is an unsigned experimental build. Windows may warn about software that
 does not have an established reputation. Confirm that the ZIP came directly
 from the person you trust before opening it.

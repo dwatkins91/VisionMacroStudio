@@ -3,8 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
-from PySide6.QtCore import Qt, QThread
+import numpy as np
+from PIL import Image, ImageDraw
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +25,11 @@ from PySide6.QtWidgets import (
 )
 
 from app import __version__
+from app.automation.debugger import (
+    analyze_step,
+    step_needs_detection,
+    step_needs_screen_preview,
+)
 from app.automation.engine import MacroWorker
 from app.automation.control import destination_steps, object_names
 from app.automation.macro_io import (
@@ -33,13 +41,103 @@ from app.automation.macro_io import (
     unique_macro_name,
 )
 from app.automation.recorder import MacroRecorder
-from app.capture.grabber import list_monitors
+from app.capture.grabber import grab_screen, list_monitors
 from app.core.context import AppContext
+from app.gui.macro_debug_dialog import MacroDebugDialog
 from app.gui.macro_overlay import MacroStatusOverlay
 from app.gui.step_dialog import StepDialog
 from app.gui.widgets import page_header
-from app.vision.detector import class_name_key
+from app.vision.detector import Detector, class_name_key, draw_detections
 from app.vision.model_manager import preferred_model
+
+
+class StepDebugWorker(QObject):
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        step: dict,
+        step_index: int,
+        step_count: int,
+        model_path: str | None,
+        monitor_index: int,
+        capture_delay: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.step = step
+        self.step_index = step_index
+        self.step_count = step_count
+        self.model_path = model_path
+        self.monitor_index = monitor_index
+        self.capture_delay = max(0.0, float(capture_delay))
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            detections = []
+            grab = None
+            if step_needs_screen_preview(self.step):
+                if self.capture_delay:
+                    time.sleep(self.capture_delay)
+                grab = grab_screen(self.monitor_index)
+            if step_needs_detection(self.step):
+                if not self.model_path:
+                    raise RuntimeError(
+                        "This step uses object detection, but no accepted model is available."
+                    )
+                detections = Detector(self.model_path).predict(grab.image, 0.05)
+            origin = (grab.left, grab.top) if grab else (0, 0)
+            report = analyze_step(
+                self.step,
+                self.step_index,
+                self.step_count,
+                detections,
+                origin,
+            )
+            if grab is not None:
+                annotated = draw_detections(np.asarray(grab.image), detections)
+                preview_image = Image.fromarray(annotated)
+                marker = report.get("marker")
+                if marker is not None:
+                    local_x = int(marker[0]) - grab.left
+                    local_y = int(marker[1]) - grab.top
+                    if 0 <= local_x < preview_image.width and 0 <= local_y < preview_image.height:
+                        draw = ImageDraw.Draw(preview_image)
+                        radius = 15
+                        draw.ellipse(
+                            (
+                                local_x - radius,
+                                local_y - radius,
+                                local_x + radius,
+                                local_y + radius,
+                            ),
+                            outline=(255, 82, 104),
+                            width=4,
+                        )
+                        draw.line(
+                            (local_x - 22, local_y, local_x + 22, local_y),
+                            fill=(255, 82, 104),
+                            width=3,
+                        )
+                        draw.line(
+                            (local_x, local_y - 22, local_x, local_y + 22),
+                            fill=(255, 82, 104),
+                            width=3,
+                        )
+                        report["details"].append(
+                            "The red marker shows the configured click or movement target."
+                        )
+                    else:
+                        report["details"].append(
+                            "The configured coordinate is outside the selected Watch source."
+                        )
+                report["preview"] = np.asarray(preview_image)
+            else:
+                report["preview"] = None
+            self.completed.emit(report)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class MacrosPage(QWidget):
@@ -48,6 +146,12 @@ class MacrosPage(QWidget):
         self.context = context
         self.thread = None
         self.worker = None
+        self.debug_thread = None
+        self.debug_worker = None
+        self.pending_debug_report = None
+        self.last_decision = ""
+        self.debug_minimized_window = False
+        self.debug_window_was_maximized = False
         self.status_overlay = MacroStatusOverlay(self)
         self.status_overlay.position_changed.connect(self.save_overlay_position)
         self.recorder = MacroRecorder()
@@ -139,12 +243,30 @@ class MacrosPage(QWidget):
         options_bar.addWidget(QLabel("Stop after"))
         options_bar.addWidget(self.time_limit)
         layout.addLayout(options_bar)
+        debug_bar = QHBoxLayout()
+        debug_bar.addWidget(QLabel("Macro debugger"))
+        self.test_button = QPushButton("SAFE STEP PREVIEW (3s)")
+        self.test_button.setToolTip(
+            "Temporarily minimize Vision Macro Studio, wait three seconds, then inspect one screen frame without sending mouse or keyboard input."
+        )
+        self.test_button.clicked.connect(self.test_selected_step)
+        debug_bar.addWidget(self.test_button)
+        debug_bar.addStretch()
+        layout.addLayout(debug_bar)
         run_bar = QHBoxLayout()
         self.run_button = QPushButton("RUN MACRO")
         self.run_button.setObjectName("Primary")
         self.run_button.clicked.connect(self.run_macro)
-        single = QPushButton("Run Selected Step")
-        single.clicked.connect(self.run_single_step)
+        self.loop_button = QPushButton("RUN ONE LOOP")
+        self.loop_button.setToolTip(
+            "Execute the macro until it finishes or would return to step 1. Live mouse and keyboard actions are enabled."
+        )
+        self.loop_button.clicked.connect(self.run_one_loop)
+        self.single_button = QPushButton("RUN SELECTED STEP")
+        self.single_button.setToolTip(
+            "Execute only the selected step. Live mouse and keyboard actions are enabled."
+        )
+        self.single_button.clicked.connect(self.run_single_step)
         self.record_button = QPushButton("Start Recording")
         self.record_button.clicked.connect(self.start_recording)
         self.stop_record_button = QPushButton("Stop Recording")
@@ -154,7 +276,8 @@ class MacrosPage(QWidget):
         self.stop_button.setObjectName("StopButton")
         self.stop_button.clicked.connect(self.emergency_stop)
         run_bar.addWidget(self.run_button)
-        run_bar.addWidget(single)
+        run_bar.addWidget(self.loop_button)
+        run_bar.addWidget(self.single_button)
         run_bar.addWidget(self.record_button)
         run_bar.addWidget(self.stop_record_button)
         run_bar.addStretch()
@@ -182,7 +305,9 @@ class MacrosPage(QWidget):
         self.monitor_combo.blockSignals(True)
         combo_index = self.monitor_combo.findData(monitor_index)
         self.monitor_combo.setCurrentIndex(max(0, combo_index))
-        self.monitor_combo.setEnabled(macro is not None and self.worker is None)
+        self.monitor_combo.setEnabled(
+            macro is not None and self.worker is None and self.debug_worker is None
+        )
         self.monitor_combo.blockSignals(False)
         model = preferred_model(self.context.projects)
         model_name = str(model.get("name", "none")) if model else "none"
@@ -576,13 +701,16 @@ class MacrosPage(QWidget):
         return str(self.context.projects.path(model["path"])) if model else None
 
     def run_macro(self) -> None:
-        self._start_worker(None)
+        self._start_worker(None, one_loop=False)
+
+    def run_one_loop(self) -> None:
+        self._start_worker(None, one_loop=True)
 
     def run_single_step(self) -> None:
-        self._start_worker(self.selected_index())
+        self._start_worker(self.selected_index(), one_loop=False)
 
-    def _start_worker(self, single_step: int | None) -> None:
-        if self.worker is not None:
+    def _start_worker(self, single_step: int | None, one_loop: bool) -> None:
+        if self.worker is not None or self.debug_worker is not None:
             return
         macro = self.current_macro()
         path = self.model_path()
@@ -591,18 +719,22 @@ class MacrosPage(QWidget):
                 self, "Build a macro", "Add at least one step first."
             )
             return
-        needs_detection = any(
-            step.get("enabled", True)
-            and step.get("action")
-            in (
-                "WAIT_FOR_OBJECT",
-                "WAIT_FOR_ANY_OBJECT",
-                "WAIT_UNTIL_DISAPPEARS",
-                "CLICK_OBJECT",
-                "RIGHT_CLICK_OBJECT",
-                "CLICK_FIRST_AVAILABLE",
+        if single_step is not None and not 0 <= single_step < len(macro["steps"]):
+            QMessageBox.information(
+                self, "Select a step", "Select a macro step in the table first."
             )
-            for step in macro.get("steps", [])
+            return
+        active_steps = (
+            [macro["steps"][single_step]]
+            if single_step is not None
+            else [
+                step
+                for step in macro.get("steps", [])
+                if step.get("enabled", True)
+            ]
+        )
+        needs_detection = any(
+            step_needs_detection(step) for step in active_steps
         )
         if needs_detection and not path:
             QMessageBox.information(
@@ -617,11 +749,12 @@ class MacrosPage(QWidget):
         )
         monitor_index = int(macro.get("monitor_index", 0))
         self.worker = MacroWorker(
-            deepcopy(macro),
-            path,
-            single_step,
-            time_limit_seconds,
-            monitor_index,
+            macro=deepcopy(macro),
+            model_path=path,
+            single_step=single_step,
+            time_limit_seconds=time_limit_seconds,
+            monitor_index=monitor_index,
+            one_loop=one_loop,
         )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
@@ -629,14 +762,15 @@ class MacrosPage(QWidget):
         self.worker.current_step.connect(self.on_current_step)
         self.worker.detection_state.connect(self.on_detection)
         self.worker.observation_state.connect(self.on_observation)
+        self.worker.decision_state.connect(self.on_decision)
         self.worker.time_limit_reached.connect(self.on_time_limit_reached)
         self.worker.failed.connect(self.on_failed)
         for signal in (self.worker.completed, self.worker.stopped, self.worker.failed):
             signal.connect(self.thread.quit)
         self.thread.finished.connect(self._worker_finished)
         self.thread.finished.connect(self.thread.deleteLater)
-        self.run_button.setEnabled(False)
-        self.time_limit.setEnabled(False)
+        self.last_decision = ""
+        self._set_execution_controls(False)
         self.status_overlay.begin(macro.get("name", "Untitled"))
         self.status_overlay.move(
             int(self.context.config.get("macro_overlay_x", 24)),
@@ -646,6 +780,96 @@ class MacrosPage(QWidget):
             self.status_overlay.show()
             self.status_overlay.raise_()
         self.thread.start()
+
+    def test_selected_step(self) -> None:
+        if self.worker is not None or self.debug_worker is not None:
+            return
+        macro = self.current_macro()
+        index = self.selected_index()
+        if not macro or not macro.get("steps"):
+            QMessageBox.information(
+                self, "Build a macro", "Create a macro with at least one step first."
+            )
+            return
+        if not 0 <= index < len(macro["steps"]):
+            QMessageBox.information(
+                self, "Select a step", "Select a macro step in the table first."
+            )
+            return
+        step = deepcopy(macro["steps"][index])
+        path = self.model_path()
+        if step_needs_detection(step) and not path:
+            QMessageBox.information(
+                self,
+                "Accept a model",
+                "This step uses object detection. Train and accept a model before previewing it.",
+            )
+            return
+        self.pending_debug_report = None
+        self.debug_thread = QThread(self)
+        self.debug_worker = StepDebugWorker(
+            step,
+            index,
+            len(macro["steps"]),
+            path,
+            int(macro.get("monitor_index", 0)),
+            3.0 if step_needs_screen_preview(step) else 0.0,
+        )
+        self.debug_worker.moveToThread(self.debug_thread)
+        self.debug_thread.started.connect(self.debug_worker.run)
+        self.debug_worker.completed.connect(self.on_debug_ready)
+        self.debug_worker.failed.connect(self.on_debug_failed)
+        self.debug_worker.completed.connect(self.debug_thread.quit)
+        self.debug_worker.failed.connect(self.debug_thread.quit)
+        self.debug_thread.finished.connect(self._debug_finished)
+        self.debug_thread.finished.connect(self.debug_thread.deleteLater)
+        self._set_execution_controls(False)
+        self.debug.setText(
+            f"Safely inspecting step {index + 1}… No mouse or keyboard input will be sent."
+        )
+        self.context.log(f"Safe preview started for macro step {index + 1}.")
+        if step_needs_screen_preview(step):
+            app_window = self.window()
+            self.debug_minimized_window = True
+            self.debug_window_was_maximized = app_window.isMaximized()
+            app_window.showMinimized()
+        self.debug_thread.start()
+
+    def on_debug_ready(self, report: dict) -> None:
+        self.pending_debug_report = report
+        message = str(report.get("decision", "Preview completed."))
+        self.last_decision = message
+        self.debug.setText(
+            f"Safe preview · step {report.get('step_number')}\n{message}"
+        )
+        self.context.log(
+            f"Safe preview step {report.get('step_number')}: {message}"
+        )
+
+    def on_debug_failed(self, message: str) -> None:
+        self.last_decision = f"Safe preview failed: {message}"
+        self.debug.setText(self.last_decision)
+        self.context.log(self.last_decision)
+        QMessageBox.critical(self, "Safe preview failed", message)
+
+    def _debug_finished(self) -> None:
+        report = self.pending_debug_report
+        self.debug_worker = None
+        self.debug_thread = None
+        self.pending_debug_report = None
+        self._set_execution_controls(True)
+        if self.debug_minimized_window:
+            app_window = self.window()
+            if self.debug_window_was_maximized:
+                app_window.showMaximized()
+            else:
+                app_window.showNormal()
+            app_window.raise_()
+            app_window.activateWindow()
+        self.debug_minimized_window = False
+        self.debug_window_was_maximized = False
+        if report is not None:
+            MacroDebugDialog(report, self).exec()
 
     def on_current_step(self, index: int, step: dict) -> None:
         self.debug.setText(
@@ -658,6 +882,10 @@ class MacrosPage(QWidget):
             f"Looking for: {name}\nDetected: {'YES' if found else 'NO'}\nConfidence: {confidence:.0%}"
         )
         self.status_overlay.set_detection(name, found, confidence)
+
+    def on_decision(self, message: str) -> None:
+        self.last_decision = message
+        self.debug.setText(f"Latest decision\n{message}")
 
     def on_observation(
         self,
@@ -682,15 +910,19 @@ class MacrosPage(QWidget):
 
     def on_time_limit_reached(self, seconds: float) -> None:
         minutes = seconds / 60
-        self.debug.setText(f"Time limit reached after {minutes:g} minute(s).")
+        self.last_decision = f"Time limit reached after {minutes:g} minute(s)."
+        self.debug.setText(self.last_decision)
         self.status_overlay.set_stopping("Time limit reached · stopping")
 
     def on_failed(self, message: str) -> None:
+        self.last_decision = f"FAILED — {message}"
+        self.debug.setText(self.last_decision)
         self.context.log(f"Macro failed: {message}")
         QMessageBox.critical(self, "Macro failed", message)
 
     def emergency_stop(self) -> None:
         if self.worker:
+            self.last_decision = "Emergency stop requested."
             self.status_overlay.set_stopping("Emergency stop requested")
             self.worker.request_stop()
         else:
@@ -703,11 +935,26 @@ class MacrosPage(QWidget):
     def _worker_finished(self) -> None:
         self.worker = None
         self.thread = None
-        self.run_button.setEnabled(True)
-        self.time_limit.setEnabled(self.current_macro() is not None)
-        self.monitor_combo.setEnabled(self.current_macro() is not None)
-        self.debug.setText("Debug: idle")
+        self._set_execution_controls(True)
+        if self.last_decision:
+            self.debug.setText(f"Last decision\n{self.last_decision}")
+        else:
+            self.debug.setText("Debug: idle")
         self.status_overlay.hide()
+
+    def _set_execution_controls(self, enabled: bool) -> None:
+        has_macro = self.current_macro() is not None
+        active = bool(enabled and has_macro)
+        for button in (
+            self.run_button,
+            self.loop_button,
+            self.single_button,
+            self.test_button,
+            self.record_button,
+        ):
+            button.setEnabled(active)
+        self.time_limit.setEnabled(active)
+        self.monitor_combo.setEnabled(active)
 
     def start_recording(self) -> None:
         if self.recorder.active:

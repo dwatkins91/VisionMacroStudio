@@ -18,6 +18,7 @@ from app.automation.control import (  # noqa: E402
     randomized_point,
     randomized_seconds,
 )
+from app.automation.debugger import analyze_step, step_needs_detection  # noqa: E402
 from app.automation.macro_io import (  # noqa: E402
     MacroFormatError,
     export_macro_file,
@@ -67,6 +68,44 @@ def main() -> None:
     assert Detector.best(detections, "time_sprite_message") is detections[0]
     assert Detector.best(detections, "TIME SPRITE MESSAGE", 0.40) is detections[0]
     assert Detector.best(detections, "time_sprite_message", 0.50) is None
+    branch_detections = [
+        {
+            "class_name": "Remains",
+            "confidence": 0.93,
+            "bbox": [100, 120, 60, 40],
+        },
+        {
+            "class_name": "Remains_Sprite",
+            "confidence": 0.81,
+            "bbox": [240, 180, 80, 60],
+        },
+    ]
+    branch_step = {
+        "action": "WAIT_FOR_ANY_OBJECT",
+        "objects": ["Remains_Sprite", "Remains"],
+        "target_steps": [2, 4],
+        "confidence": 0.70,
+        "timeout": 10,
+    }
+    branch_report = analyze_step(branch_step, 0, 4, branch_detections)
+    assert step_needs_detection(branch_step)
+    assert "Remains_Sprite" in branch_report["decision"]
+    assert "step 2" in branch_report["decision"]
+    low_report = analyze_step(
+        {"action": "WAIT_FOR_OBJECT", "object": "Time_Sprite", "confidence": 0.9},
+        2,
+        4,
+        [{"class_name": "Time_Sprite", "confidence": 0.84, "bbox": [1, 2, 3, 4]}],
+    )
+    assert low_report["decision"].startswith("WAIT")
+    assert "84%" in low_report["decision"] and "90%" in low_report["decision"]
+    coordinate_report = analyze_step(
+        {"action": "RIGHT_CLICK", "x": 640, "y": 480, "random_offset": 4},
+        4,
+        5,
+    )
+    assert coordinate_report["marker"] == (640, 480)
+    assert "No live action" not in coordinate_report["decision"]
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
         project = ProjectManager()

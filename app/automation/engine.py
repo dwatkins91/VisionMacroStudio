@@ -42,6 +42,7 @@ class MacroWorker(QObject):
     current_step = Signal(int, object)
     detection_state = Signal(str, bool, float)
     observation_state = Signal(str, float, str, float, bool)
+    decision_state = Signal(str)
     completed = Signal()
     failed = Signal(str)
     stopped = Signal()
@@ -54,6 +55,7 @@ class MacroWorker(QObject):
         single_step: int | None = None,
         time_limit_seconds: float = 0.0,
         monitor_index: int = 0,
+        one_loop: bool = False,
     ) -> None:
         super().__init__()
         self.macro = macro
@@ -61,12 +63,17 @@ class MacroWorker(QObject):
         self.single_step = single_step
         self.time_limit_seconds = max(0.0, float(time_limit_seconds))
         self.monitor_index = max(0, int(monitor_index))
+        self.one_loop = bool(one_loop)
         self.stop_event = threading.Event()
         self._deadline: float | None = None
         self._ended_by_time_limit = False
         self._held_keys: set[Any] = set()
         self._mouse = None
         self._keyboard = None
+
+    def _decision(self, message: str) -> None:
+        self.log.emit(message)
+        self.decision_state.emit(message)
 
     def request_stop(self) -> None:
         self.stop_event.set()
@@ -215,15 +222,18 @@ class MacroWorker(QObject):
                 return None, origin
             if (found is not None) == desired:
                 if found is not None:
-                    self.log.emit(self._detection_description(object_name, found))
+                    detail = self._detection_description(object_name, found)
+                    self.log.emit(detail)
+                    self.decision_state.emit(detail + " Step condition passed.")
                 else:
-                    self.log.emit(f"{object_name} is no longer visible.")
+                    detail = f"{object_name} is no longer visible."
+                    self._decision(detail + " Step condition passed.")
                 return found, origin
             if timeout > 0 and time.monotonic() - started >= timeout:
                 behavior = step.get("on_timeout", "stop")
                 message = f"Timed out waiting for {object_name}."
                 if behavior == "continue":
-                    self.log.emit(message + " Continuing.")
+                    self._decision(message + " Timeout behavior is Continue.")
                     return None, origin
                 raise TimeoutError(message)
             self._interruptible_sleep(poll)
@@ -254,7 +264,7 @@ class MacroWorker(QObject):
                 behavior = step.get("on_timeout", "stop")
                 message = f"Timed out waiting for any of: {', '.join(names)}."
                 if behavior == "continue":
-                    self.log.emit(message + " Continuing.")
+                    self._decision(message + " Timeout behavior is Continue.")
                     return None, None, origin
                 raise TimeoutError(message)
             self._interruptible_sleep(poll)
@@ -307,8 +317,8 @@ class MacroWorker(QObject):
         button = Button.right if right_click else Button.left
         self._mouse.click(button, 2 if step.get("double_click") else 1)
         verb = "Right-clicked" if right_click else "Clicked"
-        self.log.emit(
-            f"{verb} {object_name} at ({round(target_x)}, {round(target_y)})."
+        self._decision(
+            f"ACTION — {verb} {object_name} at ({round(target_x)}, {round(target_y)})."
         )
 
     def _execute_step(self, detector: Detector | None, step: dict[str, Any]) -> None:
@@ -337,13 +347,14 @@ class MacroWorker(QObject):
                 return
             selected_index = names.index(matched)
             if selected_index == 0:
-                self.log.emit(
-                    f"Selected primary object {matched} at {found['confidence']:.0%} confidence."
+                self._decision(
+                    f"DECISION — Selected primary object {matched} at "
+                    f"{found['confidence']:.0%} confidence."
                 )
             else:
                 unavailable = ", ".join(names[:selected_index])
-                self.log.emit(
-                    f"{unavailable} unavailable; selected fallback {matched} "
+                self._decision(
+                    f"DECISION — {unavailable} unavailable; selected fallback {matched} "
                     f"at {found['confidence']:.0%} confidence."
                 )
             self._click_detection(found, origin, step, matched)
@@ -389,7 +400,9 @@ class MacroWorker(QObject):
                 "DOUBLE_CLICK": "Double-clicked",
                 "RIGHT_CLICK": "Right-clicked",
             }[action]
-            self.log.emit(f"{click_name} screen location ({target_x}, {target_y}).")
+            self._decision(
+                f"ACTION — {click_name} screen location ({target_x}, {target_y})."
+            )
         elif action == "STOP":
             self.stop_event.set()
 
@@ -416,9 +429,8 @@ class MacroWorker(QObject):
             if self.single_step is not None:
                 if self.single_step < 0 or self.single_step >= len(source_steps):
                     raise RuntimeError("Select a step to run.")
-                steps = [source_steps[self.single_step]]
             active_steps = (
-                steps
+                [source_steps[self.single_step]]
                 if self.single_step is not None
                 else [step for step in steps if step.get("enabled", True)]
             )
@@ -429,7 +441,15 @@ class MacroWorker(QObject):
                 raise RuntimeError(
                     "This macro uses object detection, but no model is available."
                 )
-            self.log.emit(f"Macro started: {self.macro.get('name', 'Untitled')}")
+            if self.single_step is not None:
+                mode = f"selected step {self.single_step + 1}"
+            elif self.one_loop:
+                mode = "one loop"
+            else:
+                mode = "full macro"
+            self.log.emit(
+                f"Macro started: {self.macro.get('name', 'Untitled')} ({mode})"
+            )
             source = (
                 "the entire desktop"
                 if self.monitor_index == 0
@@ -442,7 +462,8 @@ class MacroWorker(QObject):
                 )
             detector = Detector(self.model_path) if needs_detection else None
             repeat_counts: dict[int, int] = {}
-            index = 0
+            index = self.single_step if self.single_step is not None else 0
+            one_loop_finished = False
             while index < len(steps) and not self._check_time_limit():
                 step = steps[index]
                 if self.single_step is None and not step.get("enabled", True):
@@ -463,24 +484,44 @@ class MacroWorker(QObject):
                         route = targets[names.index(matched)]
                         detail = self._detection_description(matched, found)
                         if route == 0:
-                            self.log.emit(detail + " Continuing to the next step.")
-                        elif self.single_step is not None:
-                            self.log.emit(
-                                detail
-                                + f" Branch destination is step {route}; single-step testing will not jump."
+                            self._decision(
+                                detail + " DECISION — Continuing to the next step."
                             )
+                        elif self.single_step is not None:
+                            self._decision(
+                                detail
+                                + f" DECISION — Would branch to step {route}; "
+                                "selected-step live testing will not jump."
+                            )
+                        elif self.one_loop and route == 1:
+                            self._decision(
+                                detail
+                                + " DECISION — Would branch to step 1; one-loop run is complete."
+                            )
+                            one_loop_finished = True
+                            break
                         else:
-                            self.log.emit(detail + f" Branching to step {route}.")
+                            self._decision(
+                                detail + f" DECISION — Branching to step {route}."
+                            )
                             index = self._jump_index(route, len(steps), index)
                             continue
                 elif action == "GOTO_STEP":
                     target = int(step.get("target_step", 1))
                     if self.single_step is not None:
-                        self.log.emit(
-                            f"Go To Step would jump to step {target}; single-step testing will not jump."
+                        self._decision(
+                            f"DECISION — Go To Step would jump to step {target}; "
+                            "selected-step live testing will not jump."
                         )
+                    elif self.one_loop and target == 1:
+                        self._decision(
+                            "DECISION — Go To Step would return to step 1; "
+                            "one-loop run is complete."
+                        )
+                        one_loop_finished = True
+                        break
                     else:
-                        self.log.emit(f"Going to step {target}.")
+                        self._decision(f"DECISION — Going to step {target}.")
                         self._interruptible_sleep(0.01)
                         index = self._jump_index(target, len(steps), index)
                         continue
@@ -488,23 +529,34 @@ class MacroWorker(QObject):
                     count = max(1, int(step.get("count", 1)))
                     done = repeat_counts.get(index, 0)
                     if self.single_step is not None:
-                        self.log.emit(
-                            "Repeat branching is skipped during single-step testing."
+                        self._decision(
+                            "DECISION — Repeat branching is skipped during selected-step live testing."
                         )
+                    elif self.one_loop and int(step.get("target_step", 1)) == 1:
+                        self._decision(
+                            "DECISION — Repeat would return to step 1; "
+                            "one-loop run is complete."
+                        )
+                        one_loop_finished = True
+                        break
                     elif done < count:
                         repeat_counts[index] = done + 1
                         target = int(step.get("target_step", 1))
-                        self.log.emit(
-                            f"Repeat {done + 1} of {count}: returning to step {target}."
+                        self._decision(
+                            f"DECISION — Repeat {done + 1} of {count}: returning to step {target}."
                         )
                         index = self._jump_index(target, len(steps), index)
                         continue
                     else:
                         repeat_counts.pop(index, None)
-                        self.log.emit("Repeat count completed; continuing.")
+                        self._decision(
+                            "DECISION — Repeat count completed; continuing."
+                        )
                 else:
                     self._execute_step(detector, step)
                 index += 1
+                if self.single_step is not None:
+                    break
             if self.stop_event.is_set():
                 if self._ended_by_time_limit:
                     self.log.emit("Macro stopped automatically at its time limit.")
@@ -512,7 +564,14 @@ class MacroWorker(QObject):
                     self.log.emit("Macro stopped.")
                 self.stopped.emit()
             else:
-                self.log.emit("Macro completed.")
+                if one_loop_finished:
+                    self.log.emit("One-loop run completed before returning to step 1.")
+                elif self.single_step is not None:
+                    self.log.emit(
+                        f"Selected-step live run completed for step {self.single_step + 1}."
+                    )
+                else:
+                    self.log.emit("Macro completed.")
                 self.completed.emit()
         except Exception as exc:
             self.failed.emit(str(exc))

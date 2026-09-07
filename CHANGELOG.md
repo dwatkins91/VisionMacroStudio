@@ -5,6 +5,14 @@ All notable changes to Vision Macro Studio are documented here.
 The project is currently in early development. Version numbers below describe
 working snapshots rather than a promise of backward compatibility.
 
+## [0.1.15] - 2026-09-07
+
+- Added a safe, single-frame preview for any selected macro step.
+- Added annotated detection previews, configured-coordinate markers, and explicit branch reasoning without sending mouse or keyboard input.
+- Added a live one-loop run that stops before control returns to step 1.
+- Kept the existing selected-step live run and corrected its displayed/logged step number.
+- Added visible live decision explanations to the Macro Builder.
+
 ## [0.1.14] - 2026-09-03
 
 - Kept the macro-step editor's Save session active while the coordinate picker is open.

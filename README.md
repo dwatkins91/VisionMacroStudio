@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.1.14</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
+  <strong>Current version: 0.1.15</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
 </p>
 
 ![Vision Macro Studio training page](docs/images/training-page.png)
@@ -42,7 +42,7 @@ The application uses:
 | Testing | Saved-image and live-screen inference with confidence, FPS, and timing feedback |
 | Models | Versioned model library with explicit acceptance and mAP50 reporting |
 | Macros | Detection waits, object clicks, priority fallback, conditional branches, loops, keyboard input, coordinate actions, random timing, and offsets |
-| Usability | Coordinate picker, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
+| Usability | Safe step debugger, one-loop runs, coordinate picker, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
 | Safety | F12 emergency stop, interruptible waits and mouse travel, and automatic input release |
 
 ## Quick start on Windows
@@ -105,6 +105,12 @@ Refinement creates a new candidate model rather than overwriting the earlier one
 - **Wait Until Disappears** can pause until a visual state clears.
 
 Coordinate actions include **Pick by Click** and **Pick by Hover** tools. Always verify coordinates after moving a macro to a computer with a different screen layout.
+
+## Macro debugger
+
+Select any macro row and choose **Safe Step Preview**. The app temporarily minimizes and captures the selected Watch source after three seconds, without sending mouse or keyboard input. Detection steps show every model result at 5% confidence or higher, the active threshold, accepted or rejected targets, and the branch that would be taken. Coordinate and detected-object click steps show a red target marker.
+
+**Run Selected Step** remains a live test and can send its configured input. **Run One Loop** runs normally until the macro finishes or would return to step 1. The Macro Builder keeps the most recent live decision visible after the run ends.
 
 An importable, coordinate-free example is available at [`examples/priority-branch-loop.vmsmacro.json`](examples/priority-branch-loop.vmsmacro.json).
 
@@ -171,7 +177,7 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.1.14.zip`
+`release\VisionMacroStudio-Portable-v0.1.15.zip`
 
 The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. The resulting binaries are unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
 

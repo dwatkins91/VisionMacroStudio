@@ -1,7 +1,7 @@
 {
   "format": "vision-macro-studio/macro",
   "format_version": 2,
-  "app_version": "0.1.17",
+  "app_version": "0.1.18",
   "exported_at": "2026-09-07T00:00:00+00:00",
   "screen_layout": [],
   "macro": {
@@ -11,7 +11,14 @@
     "steps": [
       {
         "enabled": true,
+        "action": "SECTION",
+        "name": "Find and Process",
+        "comment": "A colored organization row; it sends no input."
+      },
+      {
+        "enabled": true,
         "action": "CLICK_FIRST_AVAILABLE",
+        "name": "Choose available target",
         "objects": [
           "Primary_Target",
           "Fallback_Target"
@@ -34,6 +41,7 @@
       {
         "enabled": true,
         "action": "WAIT_FOR_ANY_OBJECT",
+        "name": "Choose the next route",
         "objects": [
           "Continue_Message",
           "Restart_Message"
@@ -46,8 +54,8 @@
         "max_detection_attempts": 0,
         "on_timeout": "continue",
         "target_steps": [
-          3,
-          1
+          4,
+          2
         ]
       },
       {
@@ -59,7 +67,8 @@
       {
         "enabled": true,
         "action": "GOTO_STEP",
-        "target_step": 1
+        "target_step": 2,
+        "comment": "Return to the first executable step below the section divider."
       }
     ]
   }

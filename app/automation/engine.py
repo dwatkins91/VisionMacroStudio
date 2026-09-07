@@ -514,7 +514,10 @@ class MacroWorker(QObject):
         from pynput.mouse import Button
 
         action = step.get("action")
-        if action == "WAIT_FOR_OBJECT":
+        if action == "SECTION":
+            title = str(step.get("name", "Untitled section"))
+            self._decision(f"SECTION — {title}; continuing.")
+        elif action == "WAIT_FOR_OBJECT":
             self._wait_for(detector, step, True)
         elif action == "WAIT_UNTIL_DISAPPEARS":
             self._wait_for(detector, step, False)
@@ -682,7 +685,14 @@ class MacroWorker(QObject):
                     continue
                 self.current_step.emit(index, step)
                 action = step.get("action", "")
-                self.log.emit(f"Step {index + 1}: {action.replace('_', ' ').title()}")
+                action_label = action.replace("_", " ").title()
+                step_name = str(step.get("name", "")).strip()
+                if step_name:
+                    self.log.emit(
+                        f"Step {index + 1} — {step_name}: {action_label}"
+                    )
+                else:
+                    self.log.emit(f"Step {index + 1}: {action_label}")
                 if action == "WAIT_FOR_ANY_OBJECT":
                     names = object_names(step.get("objects", []))
                     targets = destination_steps(step.get("target_steps", []))

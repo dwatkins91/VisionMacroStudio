@@ -5,6 +5,17 @@ All notable changes to Vision Macro Studio are documented here.
 The project is currently in early development. Version numbers below describe
 working snapshots rather than a promise of backward compatibility.
 
+## [0.1.18] - 2026-09-07
+
+- Added drag-and-drop macro-step reordering with automatic branch-destination remapping.
+- Upgraded duplicate, insert, delete, Move Up, and Move Down operations so numbered routes remain attached to their intended steps.
+- Added optional readable names and comments to every macro step.
+- Added colored, no-input section dividers and a dedicated Add Section workflow for organizing long macros.
+- Added a Validate Macro report covering invalid and disabled destinations, missing project classes, unreachable steps, unbounded detection waits, and closed loops without a run limit.
+- Blocked full and one-loop runs when validation contains errors while leaving warnings advisory and selected-step testing available.
+- Added validation, organization, destination-remapping, persistence, and compatibility smoke tests.
+- Kept existing macros backward-compatible; steps without names, comments, or sections continue unchanged.
+
 ## [0.1.17] - 2026-09-07
 
 - Added a per-macro drawable detection region so inference can ignore irrelevant parts of the selected Watch source.

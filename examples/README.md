@@ -13,4 +13,5 @@ configured mouse or keyboard action.
 
 The priority-branch example also demonstrates consecutive confirmations, a
 maximum detection-check count, a clicked-object cooldown, and a post-click
-wait for the selected object to disappear.
+wait for the selected object to disappear. It also includes readable step
+names, a comment, and a colored Section divider introduced in version 0.1.18.

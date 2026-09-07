@@ -38,7 +38,9 @@ def portable_self_test(report_path: Path) -> int:
         "ultralytics",
         "yaml",
         "app.automation.coordinates",
+        "app.automation.validator",
         "app.gui.region_picker",
+        "app.gui.macro_validation_dialog",
     )
     passed = True
     for module_name in modules:

@@ -8,7 +8,9 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -41,23 +43,68 @@ from app.automation.engine import MacroWorker
 from app.automation.control import destination_steps, object_names
 from app.automation.macro_io import (
     MacroFormatError,
+    delete_step_preserving_destinations,
+    duplicate_step_preserving_destinations,
     export_macro_file,
     has_absolute_coordinate_steps,
     has_coordinate_steps,
     import_macro_file,
+    insert_step_preserving_destinations,
     referenced_objects,
+    reorder_steps_preserving_destinations,
     unique_macro_name,
 )
 from app.automation.recorder import MacroRecorder
+from app.automation.validator import analyze_macro, issue_counts
 from app.capture.grabber import grab_screen, list_monitors, monitor_bounds
 from app.core.context import AppContext
 from app.gui.macro_debug_dialog import MacroDebugDialog
 from app.gui.macro_overlay import MacroStatusOverlay
+from app.gui.macro_validation_dialog import MacroValidationDialog
 from app.gui.region_picker import DetectionRegionPickerOverlay
 from app.gui.step_dialog import StepDialog
 from app.gui.widgets import page_header
 from app.vision.detector import Detector, class_name_key, draw_detections
 from app.vision.model_manager import preferred_model
+
+
+class MacroStepsTable(QTableWidget):
+    """A single-row drag table that leaves data changes to the Macro Builder."""
+
+    row_drop_requested = Signal(int, int)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(0, 4, parent)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropOverwriteMode(False)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+
+    def dropEvent(self, event) -> None:
+        if event.source() is not self:
+            event.ignore()
+            return
+        source = self.currentRow()
+        position = event.position().toPoint()
+        target = self.indexAt(position).row()
+        if target < 0:
+            target = self.rowCount()
+        elif (
+            self.dropIndicatorPosition()
+            == QAbstractItemView.DropIndicatorPosition.BelowItem
+        ):
+            target += 1
+        if target > source:
+            target -= 1
+        target = max(0, min(target, self.rowCount() - 1))
+        if source >= 0 and source != target:
+            self.row_drop_requested.emit(source, target)
+        event.setDropAction(Qt.DropAction.MoveAction)
+        event.accept()
 
 
 class StepDebugWorker(QObject):
@@ -185,7 +232,8 @@ class MacrosPage(QWidget):
         layout.addWidget(
             page_header(
                 "Macro Builder",
-                "Build resilient automation from detected objects. Coordinate recording is available, but object actions are preferred.",
+                "Build resilient automation from detected objects. Name steps, add "
+                "sections, drag rows to reorder, and validate before running.",
             )
         )
         macro_bar = QHBoxLayout()
@@ -209,16 +257,22 @@ class MacrosPage(QWidget):
         macro_bar.addWidget(import_button)
         macro_bar.addWidget(export_button)
         layout.addLayout(macro_bar)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["On", "#", "Action", "Details"])
+        self.table = MacroStepsTable(self)
+        self.table.setHorizontalHeaderLabels(["On", "#", "Step", "Details"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setToolTip(
+            "Select a row to edit it, or drag a row to reorder the macro. "
+            "Numbered branches are updated automatically."
+        )
         self.table.doubleClicked.connect(self.edit_step)
         self.table.itemChanged.connect(self._enabled_changed)
+        self.table.row_drop_requested.connect(self.drag_step)
         layout.addWidget(self.table, 1)
         edit_bar = QHBoxLayout()
+        self.edit_buttons: list[QPushButton] = []
         for text, callback in (
             ("Add Step", self.add_step),
+            ("Add Section", self.add_section),
             ("Edit", self.edit_step),
             ("Duplicate", self.duplicate_step),
             ("Delete Step", self.delete_step),
@@ -228,7 +282,15 @@ class MacrosPage(QWidget):
             button = QPushButton(text)
             button.clicked.connect(callback)
             edit_bar.addWidget(button)
+            self.edit_buttons.append(button)
         edit_bar.addStretch()
+        self.validate_button = QPushButton("VALIDATE MACRO")
+        self.validate_button.setToolTip(
+            "Check destinations, classes, disabled targets, unreachable steps, "
+            "and unbounded loops."
+        )
+        self.validate_button.clicked.connect(self.validate_current_macro)
+        edit_bar.addWidget(self.validate_button)
         layout.addLayout(edit_bar)
         self.debug = QLabel("Debug: idle")
         self.debug.setWordWrap(True)
@@ -358,6 +420,10 @@ class MacrosPage(QWidget):
             else "Accept a model before running detection steps."
         )
         active = macro is not None and self.worker is None and self.debug_worker is None
+        for button in self.edit_buttons:
+            button.setEnabled(active)
+        self.table.setDragEnabled(active)
+        self.validate_button.setEnabled(active)
         self.draw_region_button.setEnabled(active)
         self.clear_region_button.setEnabled(
             active and bool(macro.get("detection_region"))
@@ -400,6 +466,7 @@ class MacrosPage(QWidget):
         self.refresh_steps()
 
     def refresh_steps(self) -> None:
+        self.table.blockSignals(True)
         self.table.setRowCount(0)
         macro = self.current_macro()
         self.time_limit.blockSignals(True)
@@ -410,24 +477,59 @@ class MacrosPage(QWidget):
         self.time_limit.blockSignals(False)
         self.refresh_runtime_options()
         if not macro:
+            self.table.blockSignals(False)
             return
-        for index, step in enumerate(macro.get("steps", [])):
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            enabled = QTableWidgetItem()
-            enabled.setFlags(enabled.flags() | Qt.ItemIsUserCheckable)
-            enabled.setCheckState(
-                Qt.Checked if step.get("enabled", True) else Qt.Unchecked
-            )
-            enabled.setData(Qt.UserRole, index)
-            self.table.setItem(row, 0, enabled)
-            self.table.setItem(row, 1, QTableWidgetItem(str(index + 1)))
-            self.table.setItem(
-                row,
-                2,
-                QTableWidgetItem(step.get("action", "").replace("_", " ").title()),
-            )
-            self.table.setItem(row, 3, QTableWidgetItem(self.describe_step(step)))
+        try:
+            for index, step in enumerate(macro.get("steps", [])):
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                is_section = step.get("action") == "SECTION"
+                enabled = QTableWidgetItem()
+                enabled.setData(Qt.UserRole, index)
+                if is_section:
+                    enabled.setText("—")
+                    enabled.setFlags(enabled.flags() & ~Qt.ItemIsUserCheckable)
+                else:
+                    enabled.setFlags(enabled.flags() | Qt.ItemIsUserCheckable)
+                    enabled.setCheckState(
+                        Qt.Checked if step.get("enabled", True) else Qt.Unchecked
+                    )
+                number_item = QTableWidgetItem(str(index + 1))
+                action = str(step.get("action", ""))
+                action_label = action.replace("_", " ").title()
+                name = str(step.get("name", "")).strip()
+                comment = str(step.get("comment", "")).strip()
+                if is_section:
+                    step_text = f"◆  {name or 'Untitled section'}"
+                    details = comment or "Visual divider · no input action"
+                else:
+                    step_text = name or action_label
+                    action_details = self.describe_step(step)
+                    details = action_label
+                    if action_details:
+                        details += " · " + action_details
+                    if comment:
+                        details += " — " + comment
+                step_item = QTableWidgetItem(step_text)
+                detail_item = QTableWidgetItem(details)
+                items = (enabled, number_item, step_item, detail_item)
+                for column, item in enumerate(items):
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    if comment:
+                        item.setToolTip(comment)
+                    self.table.setItem(row, column, item)
+                if is_section:
+                    background = QBrush(QColor("#174a50"))
+                    foreground = QBrush(QColor("#d8fff4"))
+                    for item in items:
+                        item.setBackground(background)
+                        item.setForeground(foreground)
+                        font = QFont(item.font())
+                        font.setBold(True)
+                        item.setFont(font)
+                    self.table.setRowHeight(row, 36)
+        finally:
+            self.table.blockSignals(False)
 
     @staticmethod
     def describe_step(step: dict) -> str:
@@ -702,6 +804,39 @@ class MacrosPage(QWidget):
         monitor_index = int(selected.get("monitor_index", 0)) if selected else 0
         return monitor_bounds(monitor_index)
 
+    def macro_validation_issues(self):
+        macro = self.current_macro()
+        if macro is None:
+            return []
+        classes = self.context.projects.data.get("classes", [])
+        return analyze_macro(macro, classes)
+
+    def validate_current_macro(self) -> None:
+        macro = self.current_macro()
+        if macro is None:
+            QMessageBox.information(
+                self, "Choose a macro", "Create or select a macro to validate."
+            )
+            return
+        issues = self.macro_validation_issues()
+        counts = issue_counts(issues)
+        self.context.log(
+            f"Validated macro {macro['name']}: {counts['error']} error(s), "
+            f"{counts['warning']} warning(s)."
+        )
+        dialog = MacroValidationDialog(macro["name"], issues, self)
+        dialog.step_requested.connect(self.select_validation_step)
+        dialog.exec()
+
+    def select_validation_step(self, row: int) -> None:
+        macro = self.current_macro()
+        if macro is None or not 0 <= row < len(macro.get("steps", [])):
+            return
+        self.table.selectRow(row)
+        item = self.table.item(row, 2)
+        if item is not None:
+            self.table.scrollToItem(item)
+
     def add_step(self) -> None:
         macro = self.current_macro()
         if not macro:
@@ -719,6 +854,34 @@ class MacrosPage(QWidget):
             macro["steps"].append(dialog.result_step())
             self.save()
             self.refresh_steps()
+
+    def add_section(self) -> None:
+        macro = self.current_macro()
+        if not macro:
+            self.new_macro()
+            macro = self.current_macro()
+        if not macro:
+            return
+        dialog = StepDialog(
+            self.context.projects.data.get("classes", []),
+            {
+                "enabled": True,
+                "action": "SECTION",
+                "name": "New Section",
+            },
+            self,
+            watch_bounds=self.current_watch_bounds(macro),
+        )
+        if not dialog.exec():
+            return
+        selected = self.selected_index()
+        insertion = selected + 1 if selected >= 0 else len(macro["steps"])
+        macro["steps"] = insert_step_preserving_destinations(
+            macro["steps"], insertion, dialog.result_step()
+        )
+        self.save()
+        self.refresh_steps()
+        self.table.selectRow(insertion)
 
     def edit_step(self, *args) -> None:
         macro = self.current_macro()
@@ -750,7 +913,12 @@ class MacrosPage(QWidget):
         macro = self.current_macro()
         index = self.selected_index()
         if macro and index >= 0:
-            macro["steps"].insert(index + 1, deepcopy(macro["steps"][index]))
+            macro["steps"] = duplicate_step_preserving_destinations(
+                macro["steps"], index
+            )
+            copied_name = str(macro["steps"][index + 1].get("name", "")).strip()
+            if copied_name:
+                macro["steps"][index + 1]["name"] = copied_name + " Copy"
             self.save()
             self.refresh_steps()
             self.table.selectRow(index + 1)
@@ -758,10 +926,39 @@ class MacrosPage(QWidget):
     def delete_step(self) -> None:
         macro = self.current_macro()
         index = self.selected_index()
-        if macro and index >= 0:
-            macro["steps"].pop(index)
-            self.save()
-            self.refresh_steps()
+        if not macro or index < 0:
+            return
+        step_number = index + 1
+        references: list[int] = []
+        for source_index, step in enumerate(macro["steps"]):
+            try:
+                if step.get("action") == "WAIT_FOR_ANY_OBJECT":
+                    targets = destination_steps(step.get("target_steps", []))
+                elif step.get("action") in {"GOTO_STEP", "REPEAT"}:
+                    targets = [int(step.get("target_step", 0))]
+                else:
+                    targets = []
+            except (TypeError, ValueError):
+                targets = []
+            if step_number in targets:
+                references.append(source_index + 1)
+        message = f"Delete step {step_number}?"
+        if references:
+            message += (
+                "\n\nIt is referenced by step(s) "
+                + ", ".join(str(value) for value in references)
+                + ". Those routes will be marked invalid instead of silently "
+                "pointing to a different step."
+            )
+        if QMessageBox.question(self, "Delete macro step", message) != QMessageBox.Yes:
+            return
+        macro["steps"] = delete_step_preserving_destinations(
+            macro["steps"], index
+        )
+        self.save()
+        self.refresh_steps()
+        if macro["steps"]:
+            self.table.selectRow(min(index, len(macro["steps"]) - 1))
 
     def move_step(self, delta: int) -> None:
         macro = self.current_macro()
@@ -772,13 +969,30 @@ class MacrosPage(QWidget):
             and 0 <= index < len(macro["steps"])
             and 0 <= target < len(macro["steps"])
         ):
-            macro["steps"][index], macro["steps"][target] = (
-                macro["steps"][target],
-                macro["steps"][index],
+            macro["steps"] = reorder_steps_preserving_destinations(
+                macro["steps"], index, target
             )
             self.save()
             self.refresh_steps()
             self.table.selectRow(target)
+
+    def drag_step(self, source: int, target: int) -> None:
+        macro = self.current_macro()
+        if not macro or source == target:
+            return
+        try:
+            macro["steps"] = reorder_steps_preserving_destinations(
+                macro["steps"], source, target
+            )
+        except IndexError:
+            return
+        self.save()
+        self.refresh_steps()
+        self.table.selectRow(target)
+        self.debug.setText(
+            f"Moved step {source + 1} to step {target + 1}. Branch destinations "
+            "were updated automatically."
+        )
 
     def save(self) -> None:
         if self.context.projects.is_open:
@@ -888,6 +1102,16 @@ class MacrosPage(QWidget):
                 self, "Select a step", "Select a macro step in the table first."
             )
             return
+        if single_step is None:
+            issues = self.macro_validation_issues()
+            if issue_counts(issues)["error"]:
+                self.context.log(
+                    f"Macro start blocked because {macro['name']} has validation errors."
+                )
+                dialog = MacroValidationDialog(macro["name"], issues, self)
+                dialog.step_requested.connect(self.select_validation_step)
+                dialog.exec()
+                return
         active_steps = (
             [macro["steps"][single_step]]
             if single_step is not None
@@ -1038,8 +1262,12 @@ class MacrosPage(QWidget):
             MacroDebugDialog(report, self).exec()
 
     def on_current_step(self, index: int, step: dict) -> None:
+        action = step.get("action", "").replace("_", " ")
+        name = str(step.get("name", "")).strip()
+        label = f"{name} · {action}" if name else action
         self.debug.setText(
-            f"Current step {index + 1}: {step.get('action', '').replace('_', ' ')}\nNext action is shown above. Elapsed execution is in the log."
+            f"Current step {index + 1}: {label}\nNext action is shown above. "
+            "Elapsed execution is in the log."
         )
         self.status_overlay.set_step(index, step)
 
@@ -1118,6 +1346,7 @@ class MacrosPage(QWidget):
             self.test_button,
             self.record_button,
             self.draw_region_button,
+            self.validate_button,
         ):
             button.setEnabled(active)
         self.clear_region_button.setEnabled(
@@ -1125,6 +1354,9 @@ class MacrosPage(QWidget):
         )
         self.time_limit.setEnabled(active)
         self.monitor_combo.setEnabled(active)
+        for button in self.edit_buttons:
+            button.setEnabled(active)
+        self.table.setDragEnabled(active)
 
     def start_recording(self) -> None:
         if self.recorder.active:

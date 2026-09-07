@@ -54,6 +54,7 @@ class MacroStatusOverlay(QWidget):
 
     def begin(self, macro_name: str) -> None:
         self.step_line.setText(f"Starting · {macro_name}")
+        self.step_line.setToolTip("")
         self.detection_line.setText("No detection yet")
         self.detection_line.setStyleSheet(
             "color: #9eabc0; font: 8pt 'Segoe UI';"
@@ -62,7 +63,10 @@ class MacroStatusOverlay(QWidget):
 
     def set_step(self, index: int, step: dict) -> None:
         action = str(step.get("action", "")).replace("_", " ").title()
-        self.step_line.setText(f"Step {index + 1} · {action}")
+        name = str(step.get("name", "")).strip()
+        label = name if name else action
+        self.step_line.setText(f"Step {index + 1} · {label}")
+        self.step_line.setToolTip(action if name else "")
         self.adjustSize()
 
     def set_detection(self, name: str, found: bool, confidence: float) -> None:

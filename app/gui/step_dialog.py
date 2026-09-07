@@ -62,6 +62,17 @@ class StepDialog(QDialog):
         self.action = QComboBox()
         self.action.addItems(ACTIONS)
         self.action.setCurrentText(self.step.get("action", ACTIONS[0]))
+        self.step_name = QLineEdit(str(self.step.get("name", "")))
+        self.step_name.setMaxLength(120)
+        self.step_name.setPlaceholderText(
+            "Example: Wait for completion message"
+        )
+        self.step_name.setToolTip(
+            "An optional readable name for this step. A Section action requires a title."
+        )
+        self.comment = QLineEdit(str(self.step.get("comment", "")))
+        self.comment.setMaxLength(500)
+        self.comment.setPlaceholderText("Optional note about what this step does")
         self.object = QComboBox()
         self.object.setEditable(True)
         self.object.addItems(classes)
@@ -247,6 +258,8 @@ class StepDialog(QDialog):
         rows = [
             ("Enabled", self.enabled),
             ("Action", self.action),
+            ("Step name / section title", self.step_name),
+            ("Comment", self.comment),
             ("Object", self.object),
             ("Objects in priority order", self.objects),
             ("Destination step per object", self.target_steps),
@@ -301,7 +314,12 @@ class StepDialog(QDialog):
 
     def update_visibility(self) -> None:
         action = self.action.currentText()
-        visible = {"Enabled", "Action"}
+        visible = {
+            "Enabled",
+            "Action",
+            "Step name / section title",
+            "Comment",
+        }
         if action in (
             "WAIT_FOR_OBJECT",
             "WAIT_UNTIL_DISAPPEARS",
@@ -375,6 +393,10 @@ class StepDialog(QDialog):
     def result_step(self) -> dict:
         action = self.action.currentText()
         result = {"enabled": self.enabled.isChecked(), "action": action}
+        if self.step_name.text().strip():
+            result["name"] = self.step_name.text().strip()
+        if self.comment.text().strip():
+            result["comment"] = self.comment.text().strip()
         if action in (
             "WAIT_FOR_OBJECT",
             "WAIT_UNTIL_DISAPPEARS",
@@ -613,6 +635,13 @@ class StepDialog(QDialog):
 
     def accept(self) -> None:
         action = self.action.currentText()
+        if action == "SECTION" and not self.step_name.text().strip():
+            QMessageBox.warning(
+                self,
+                "Name this section",
+                "Enter a section title so the divider is recognizable in the Macro Builder.",
+            )
+            return
         detection_actions = {
             "WAIT_FOR_OBJECT",
             "WAIT_FOR_ANY_OBJECT",

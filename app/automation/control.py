@@ -22,6 +22,7 @@ SUPPORTED_ACTIONS = (
     "REPEAT",
     "GOTO_STEP",
     "STOP",
+    "SECTION",
 )
 
 

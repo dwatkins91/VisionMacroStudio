@@ -31,13 +31,18 @@ from app.automation.coordinates import (  # noqa: E402
 from app.automation.debugger import analyze_step, step_needs_detection  # noqa: E402
 from app.automation.macro_io import (  # noqa: E402
     MacroFormatError,
+    delete_step_preserving_destinations,
+    duplicate_step_preserving_destinations,
     export_macro_file,
     has_absolute_coordinate_steps,
     has_coordinate_steps,
     import_macro_file,
+    insert_step_preserving_destinations,
     referenced_objects,
+    reorder_steps_preserving_destinations,
     unique_macro_name,
 )
+from app.automation.validator import analyze_macro, issue_counts  # noqa: E402
 from app.vision.dataset import automatic_split, class_counts, export_yolo  # noqa: E402
 from app.vision.model_manager import (  # noqa: E402
     accept_model,
@@ -271,6 +276,117 @@ def main() -> None:
         normalized_region,
         {"left": 0, "top": 0, "width": 2560, "height": 1440},
     ) == {"left": 640, "top": 360, "width": 1280, "height": 720}
+
+    builder_steps = [
+        {
+            "enabled": True,
+            "action": "WAIT_FOR_ANY_OBJECT",
+            "objects": ["Primary", "Fallback"],
+            "target_steps": [2, 4],
+            "confidence": 0.7,
+            "timeout": 5,
+        },
+        {"enabled": True, "action": "SECTION", "name": "Work"},
+        {"enabled": True, "action": "WAIT", "duration": 1},
+        {"enabled": True, "action": "GOTO_STEP", "target_step": 1},
+    ]
+    reordered = reorder_steps_preserving_destinations(builder_steps, 3, 1)
+    assert reordered[0]["target_steps"] == [3, 2]
+    assert reordered[1]["action"] == "GOTO_STEP"
+    assert reordered[1]["target_step"] == 1
+    duplicated = duplicate_step_preserving_destinations(builder_steps, 1)
+    assert duplicated[0]["target_steps"] == [2, 5]
+    assert duplicated[2]["action"] == "SECTION"
+    duplicated_branch = duplicate_step_preserving_destinations(builder_steps, 0)
+    assert duplicated_branch[0]["target_steps"] == [3, 5]
+    assert duplicated_branch[1]["target_steps"] == [3, 5]
+    inserted = insert_step_preserving_destinations(
+        builder_steps,
+        1,
+        {"enabled": True, "action": "SECTION", "name": "Inserted"},
+    )
+    assert inserted[0]["target_steps"] == [3, 5]
+    deleted = delete_step_preserving_destinations(builder_steps, 1)
+    assert deleted[0]["target_steps"] == [4, 3]
+
+    validation_macro = {
+        "name": "Validation Check",
+        "steps": [
+            {"enabled": True, "action": "GOTO_STEP", "target_step": 2},
+            {"enabled": False, "action": "WAIT", "duration": 1},
+            {
+                "enabled": True,
+                "action": "WAIT_FOR_OBJECT",
+                "object": "Missing_Class",
+                "confidence": 0.7,
+                "timeout": 0,
+                "timeout_max": 0,
+                "max_detection_attempts": 0,
+            },
+        ],
+    }
+    validation_issues = analyze_macro(validation_macro, ["Known_Class"])
+    validation_codes = {issue.code for issue in validation_issues}
+    assert "disabled_destination" in validation_codes
+    assert "missing_class" in validation_codes
+    assert "unbounded_wait" in validation_codes
+    assert issue_counts(validation_issues)["error"] >= 1
+    closed_loop_issues = analyze_macro(
+        {
+            "name": "Closed Loop",
+            "steps": [
+                {"enabled": True, "action": "GOTO_STEP", "target_step": 1}
+            ],
+        },
+        [],
+    )
+    assert any(issue.code == "closed_loop" for issue in closed_loop_issues)
+    bounded_loop_issues = analyze_macro(
+        {
+            "name": "Bounded Loop",
+            "time_limit_minutes": 10,
+            "steps": [
+                {"enabled": True, "action": "GOTO_STEP", "target_step": 1}
+            ],
+        },
+        [],
+    )
+    assert not any(issue.code == "closed_loop" for issue in bounded_loop_issues)
+    assert not analyze_macro(
+        {
+            "name": "Organized Macro",
+            "steps": [
+                {
+                    "enabled": True,
+                    "action": "SECTION",
+                    "name": "Gathering",
+                    "comment": "Visual organization only",
+                },
+                {"enabled": True, "action": "STOP", "name": "Finished"},
+            ],
+        },
+        [],
+    )
+    section_report = analyze_step(
+        {
+            "enabled": True,
+            "action": "SECTION",
+            "name": "Banking",
+            "comment": "Organization only",
+        },
+        2,
+        5,
+    )
+    assert "section divider" in section_report["decision"]
+    assert any("Organization only" in detail for detail in section_report["details"])
+    unnamed_section_issues = analyze_macro(
+        {"name": "Unnamed Section", "steps": [{"action": "SECTION"}]},
+        [],
+    )
+    assert any(
+        issue.code == "format" and "section title" in issue.message
+        for issue in unnamed_section_issues
+    )
     try:
         destination_steps("three")
     except ValueError:
@@ -373,6 +489,8 @@ def main() -> None:
                     {
                         "enabled": True,
                         "action": "CLICK_FIRST_AVAILABLE",
+                        "name": "Choose target",
+                        "comment": "Primary target first, then fallback.",
                         "objects": ["Start_Button", "Target"],
                         "confidence": 0.3,
                         "required_consecutive_detections": 2,
@@ -421,6 +539,8 @@ def main() -> None:
         assert saved_macro["time_limit_minutes"] == 12.5
         assert saved_macro["detection_region"] == normalized_region
         assert saved_macro["steps"][0]["objects"] == ["Start_Button", "Target"]
+        assert saved_macro["steps"][0]["name"] == "Choose target"
+        assert saved_macro["steps"][0]["comment"].startswith("Primary target")
         assert saved_macro["steps"][0]["required_consecutive_detections"] == 2
         assert saved_macro["steps"][0]["max_detection_attempts"] == 25
         assert saved_macro["steps"][0]["click_cooldown_seconds"] == 4

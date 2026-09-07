@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.1.17</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
+  <strong>Current version: 0.1.18</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
 </p>
 
 ![Vision Macro Studio training page](docs/images/training-page.png)
@@ -41,8 +41,8 @@ The application uses:
 | Training | Nano/Small/Medium YOLO fine-tuning, CPU/GPU selection, model lineage, training from an existing model |
 | Testing | Saved-image and live-screen inference with confidence, FPS, and timing feedback |
 | Models | Versioned model library with explicit acceptance and mAP50 reporting |
-| Macros | Detection regions, stable confirmations, click cooldowns, object clicks, priority fallback, conditional branches, loops, portable coordinates, random timing, and offsets |
-| Usability | Safe step debugger, one-loop runs, coordinate picker, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
+| Macros | Named steps, section dividers, drag reordering, validation, detection regions, stable confirmations, object clicks, conditional branches, loops, portable coordinates, random timing, and offsets |
+| Usability | Safe step debugger, one-loop runs, coordinate picker, destination-safe editing, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
 | Safety | F12 emergency stop, interruptible waits and mouse travel, and automatic input release |
 
 ## Quick start on Windows
@@ -103,8 +103,25 @@ Refinement creates a new candidate model rather than overwriting the earlier one
 - **Click**, **Double Click**, **Right Click**, and **Move Mouse** support absolute or portable relative positions and optional random pixel offsets.
 - **Press Key** and **Type Text** provide keyboard actions.
 - **Wait Until Disappears** can pause until a visual state clears.
+- **Section** adds a colored organizational divider and never sends input.
 
 Coordinate actions include **Pick by Click** and **Pick by Hover** tools. Always use Safe Step Preview after moving a macro to another computer.
+
+## Builder quality of life
+
+Every step can have a readable name and comment. Names appear in the builder, live log, and compact overlay, while comments remain visible in the row and Safe Step Preview. **Add Section** inserts a colored divider after the selected row so gathering, waiting, banking, and looping phases remain easy to scan.
+
+Macro rows can be dragged into a new order. Move Up, Move Down, Duplicate, Add Section, and drag-to-reorder automatically recalculate numbered branch destinations so they continue targeting the same logical steps. If a referenced step is deleted, its route is deliberately marked invalid instead of silently redirecting to an unrelated row.
+
+Choose **Validate Macro** to check:
+
+- missing or disabled destination steps
+- object names absent from the current project
+- unreachable enabled steps
+- detection steps that can wait forever
+- closed loops without an exit or macro time limit
+
+Validation errors block full and one-loop runs until repaired. Warnings remain advisory, and **Run Selected Step** stays available for focused troubleshooting. Double-click a validation issue to return directly to its row.
 
 ## Regions and portable coordinates
 
@@ -143,7 +160,7 @@ An importable, coordinate-free example is available at [`examples/priority-branc
 
 The Macro Builder exports versioned `.vmsmacro.json` files containing the macro steps, object names, timing, detection region, coordinate bases, offsets, monitor choice, and time limit. Models, screenshots, and dataset images are not included.
 
-Version 0.1.17 exports macro format version 2 so older releases cannot silently treat portable coordinates as absolute ones. It continues to import existing format version 1 macros.
+Version 0.1.18 continues to export macro format version 2 and import existing format version 1 macros. A macro containing the new Section action requires version 0.1.18 or newer; an older release rejects that unsupported action instead of attempting to run it.
 
 Imported macros are validated before being added. The application warns about missing object classes, unavailable monitors, and coordinates that may need verification on a different display layout.
 
@@ -186,7 +203,7 @@ Run the dependency-light smoke test from the repository root:
 py tests\smoke_test.py
 ```
 
-The smoke test covers project persistence, labeled captures, dataset generation, class renaming, model registration and acceptance, macro stability, detection-region cropping, portable-coordinate scaling and validation, and project ZIP export/import.
+The smoke test covers project persistence, labeled captures, dataset generation, class renaming, model registration and acceptance, macro stability, detection-region cropping, portable-coordinate scaling, destination-preserving builder edits, macro validation, and project ZIP export/import.
 
 To check every Python module for syntax errors:
 
@@ -204,7 +221,7 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.1.17.zip`
+`release\VisionMacroStudio-Portable-v0.1.18.zip`
 
 The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. The resulting binaries are unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
 
@@ -212,7 +229,7 @@ The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Tor
 
 - Detection regions are configured per macro rather than separately for each detection step.
 - Window-relative coordinates do not bring a covered or minimized target window to the foreground.
-- The macro builder uses row controls rather than draggable visual blocks.
+- The macro builder uses draggable rows rather than a connected visual flowchart.
 - The input recorder stores clicks, key presses, and delays rather than every raw mouse movement.
 - Training charts are produced in the Ultralytics run folder instead of being graphed inside the application.
 - GPU acceleration requires compatible NVIDIA hardware and a supported PyTorch installation.

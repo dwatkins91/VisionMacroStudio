@@ -110,12 +110,25 @@ def analyze_step(
     next_label = _next_step_label(step_index, step_count)
     decision = "No live action was performed."
 
+    step_name = str(step.get("name", "")).strip()
+    comment = str(step.get("comment", "")).strip()
+    if step_name:
+        details.append(f"Step name: {step_name}.")
+    if comment:
+        details.append(f"Comment: {comment}")
+
     if not step.get("enabled", True):
         details.append(
             "This step is disabled in a full macro run; the debugger evaluated it anyway."
         )
 
-    if step_needs_detection(step):
+    if action == "SECTION":
+        title = str(step.get("name", "Untitled section")).strip()
+        decision = (
+            f"PREVIEW — section divider {title!r}; "
+            f"would continue to {next_label}."
+        )
+    elif step_needs_detection(step):
         confidence = float(step.get("confidence", 0.70))
         required = max(1, int(step.get("required_consecutive_detections", 1)))
         max_attempts = max(0, int(step.get("max_detection_attempts", 0)))

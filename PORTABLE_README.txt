@@ -29,6 +29,12 @@ selected monitor. Fixed mouse steps can use absolute screen coordinates,
 resolution-scaled Watch percentages, or a percentage inside a saved visible
 application window. Safe-preview portable coordinates before live use.
 
+Builder organization: Macro steps can be named, commented, duplicated, and
+dragged into a new order without silently changing their branch targets. Add
+Section creates a colored divider. Validate Macro checks missing classes,
+broken or disabled destinations, unreachable steps, and unbounded loops before
+a full run.
+
 This is an unsigned experimental build. Windows may warn about software that
 does not have an established reputation. Confirm that the ZIP came directly
 from the person you trust before opening it.

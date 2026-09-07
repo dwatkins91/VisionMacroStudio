@@ -67,11 +67,23 @@ def validate_macro(macro: Any) -> dict[str, Any]:
     for index, step in enumerate(steps, 1):
         if not isinstance(step, dict):
             raise MacroFormatError(f"Step {index} is not a JSON object.")
+        for field, limit in (("name", 120), ("comment", 500)):
+            value = step.get(field, "")
+            if not isinstance(value, str):
+                raise MacroFormatError(
+                    f"Step {index} has an invalid {field}."
+                )
+            if len(value) > limit:
+                raise MacroFormatError(
+                    f"Step {index} {field} is longer than {limit} characters."
+                )
         action = step.get("action")
         if action not in SUPPORTED_ACTIONS:
             raise MacroFormatError(
                 f"Step {index} uses an unsupported action: {action!r}."
             )
+        if action == "SECTION" and not str(step.get("name", "")).strip():
+            raise MacroFormatError(f"Step {index} needs a section title.")
         if action == "WAIT_FOR_ANY_OBJECT":
             names = object_names(step.get("objects", []))
             try:
@@ -271,3 +283,128 @@ def has_absolute_coordinate_steps(macro: dict[str, Any]) -> bool:
         and coordinate_mode(step.get("coordinate_mode", "absolute")) == "absolute"
         for step in macro.get("steps", [])
     )
+
+
+def _remap_step_destinations(
+    step: dict[str, Any],
+    old_to_new: dict[int, int],
+    missing_target: int | None = None,
+    removed_step: int | None = None,
+) -> dict[str, Any]:
+    """Remap numbered branches after an editor changes the row order."""
+    result = deepcopy(step)
+
+    def mapped(value: Any) -> int:
+        target = int(value)
+        if target == 0:
+            return 0
+        if removed_step is not None and target == removed_step:
+            return missing_target if missing_target is not None else target
+        return old_to_new.get(target, target)
+
+    action = result.get("action")
+    if action == "WAIT_FOR_ANY_OBJECT":
+        try:
+            result["target_steps"] = [
+                mapped(target)
+                for target in destination_steps(result.get("target_steps", []))
+            ]
+        except (TypeError, ValueError):
+            pass
+    elif action in {"GOTO_STEP", "REPEAT"} and "target_step" in result:
+        try:
+            result["target_step"] = mapped(result["target_step"])
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+def reorder_steps_preserving_destinations(
+    steps: list[dict[str, Any]], source_index: int, target_index: int
+) -> list[dict[str, Any]]:
+    """Move one step and keep every branch attached to its original target."""
+    if not 0 <= source_index < len(steps):
+        raise IndexError("The source step does not exist.")
+    if not 0 <= target_index < len(steps):
+        raise IndexError("The destination row does not exist.")
+    entries = list(enumerate(deepcopy(steps)))
+    moved = entries.pop(source_index)
+    entries.insert(target_index, moved)
+    old_to_new = {
+        old_index + 1: new_index + 1
+        for new_index, (old_index, _step) in enumerate(entries)
+    }
+    return [
+        _remap_step_destinations(step, old_to_new)
+        for _old_index, step in entries
+    ]
+
+
+def insert_step_preserving_destinations(
+    steps: list[dict[str, Any]], target_index: int, new_step: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Insert a step and shift existing branch destinations safely."""
+    if not 0 <= target_index <= len(steps):
+        raise IndexError("The insertion row does not exist.")
+    entries: list[tuple[int | None, dict[str, Any]]] = list(
+        enumerate(deepcopy(steps))
+    )
+    entries.insert(target_index, (None, deepcopy(new_step)))
+    old_to_new = {
+        old_index + 1: new_index + 1
+        for new_index, (old_index, _step) in enumerate(entries)
+        if old_index is not None
+    }
+    return [
+        _remap_step_destinations(step, old_to_new)
+        for _old_index, step in entries
+    ]
+
+
+def duplicate_step_preserving_destinations(
+    steps: list[dict[str, Any]], source_index: int
+) -> list[dict[str, Any]]:
+    """Duplicate a step immediately below it without breaking numbered routes."""
+    if not 0 <= source_index < len(steps):
+        raise IndexError("The step to duplicate does not exist.")
+    entries: list[tuple[int | None, dict[str, Any]]] = list(
+        enumerate(deepcopy(steps))
+    )
+    entries.insert(source_index + 1, (None, deepcopy(steps[source_index])))
+    old_to_new = {
+        old_index + 1: new_index + 1
+        for new_index, (old_index, _step) in enumerate(entries)
+        if old_index is not None
+    }
+    return [
+        _remap_step_destinations(step, old_to_new)
+        for _old_index, step in entries
+    ]
+
+
+def delete_step_preserving_destinations(
+    steps: list[dict[str, Any]], source_index: int
+) -> list[dict[str, Any]]:
+    """Delete a step, preserve other targets, and expose routes to the removed row."""
+    if not 0 <= source_index < len(steps):
+        raise IndexError("The step to delete does not exist.")
+    removed_step = source_index + 1
+    entries = [
+        (old_index, deepcopy(step))
+        for old_index, step in enumerate(steps)
+        if old_index != source_index
+    ]
+    old_to_new = {
+        old_index + 1: new_index + 1
+        for new_index, (old_index, _step) in enumerate(entries)
+    }
+    missing_target = len(entries) + 1
+    return [
+        _remap_step_destinations(
+            step,
+            old_to_new,
+            missing_target=missing_target,
+            removed_step=removed_step,
+        )
+        for _old_index, step in entries
+    ]

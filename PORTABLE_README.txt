@@ -1,7 +1,7 @@
 VISION MACRO STUDIO - PORTABLE WINDOWS EDITION
 ================================================
 
-Version 0.9.0 - Public Release Candidate
+Version 1.0.0 - Public Release
 
 1. Extract the complete ZIP to a normal folder.
 2. Open the VisionMacroStudio folder.
@@ -47,7 +47,7 @@ you approve every box before saving. Quality Dashboard reports coverage and
 near duplicates. New models preserve per-class metrics, notes, confusion
 matrices, and training curves for comparison in Model Library.
 
-This is an unsigned experimental build. Windows may warn about software that
+This is an unsigned public build. Windows may warn about software that
 does not have an established reputation. Confirm that the ZIP came directly
 from the person you trust before opening it.
 

@@ -24,7 +24,7 @@ from app.gui.pages.project_page import ProjectPage
 from app.gui.pages.settings_page import SettingsPage
 from app.gui.pages.testing_page import TestingPage
 from app.gui.pages.training_page import TrainingPage
-from app import __repository_url__, __version__
+from app import __release_name__, __repository_url__, __version__
 from app.gui.about_dialog import AboutDialog
 from app.gui.system_check_dialog import SystemCheckDialog
 from app.gui.welcome_dialog import WelcomeDialog
@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"Vision Macro Studio {__version__} RC")
+        self.setWindowTitle(f"Vision Macro Studio {__version__}")
         self.resize(1280, 820)
         self.setMinimumSize(1050, 680)
         self.context = AppContext()
@@ -96,7 +96,7 @@ class MainWindow(QMainWindow):
         self.project_label.setObjectName("Subtitle")
         self.project_label.setContentsMargins(12, 8, 12, 4)
         side_layout.addWidget(self.project_label)
-        version_label = QLabel(f"v{__version__} · Release Candidate")
+        version_label = QLabel(f"v{__version__} · {__release_name__}")
         version_label.setObjectName("VersionLabel")
         version_label.setContentsMargins(12, 0, 12, 4)
         side_layout.addWidget(version_label)

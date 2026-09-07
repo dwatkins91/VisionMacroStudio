@@ -1,6 +1,7 @@
-name: Windows Release Candidate
+name: Windows Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -22,7 +23,11 @@ jobs:
           python-version: "3.11"
           architecture: x64
           cache: pip
-      - name: Verify tag and release files
+      - name: Verify release files
+        shell: pwsh
+        run: python tools/validate_release.py
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           python tools/validate_release.py --tag "${{ github.ref_name }}"
@@ -39,26 +44,45 @@ jobs:
       - name: Build and self-test portable edition
         shell: pwsh
         run: python tools/build_windows_portable.py --no-prompt
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build and self-test Windows installer
+        shell: pwsh
+        run: python tools/build_windows_installer.py
       - name: Create SHA-256 checksum
         shell: pwsh
         run: |
-          $Archive = Get-ChildItem release\VisionMacroStudio-Portable-v*.zip | Select-Object -First 1
-          if (-not $Archive) { throw "Portable ZIP was not created." }
-          $Hash = (Get-FileHash -Algorithm SHA256 $Archive.FullName).Hash.ToLowerInvariant()
-          "$Hash  $($Archive.Name)" | Set-Content -Encoding ascii release\SHA256SUMS.txt
+          $Assets = @(
+            Get-ChildItem release\VisionMacroStudio-Portable-v*.zip
+            Get-ChildItem release\VisionMacroStudio-Setup-v*.exe
+          )
+          if ($Assets.Count -ne 2) { throw "Expected one portable ZIP and one Setup EXE." }
+          $Lines = foreach ($Asset in $Assets | Sort-Object Name) {
+            $Hash = (Get-FileHash -Algorithm SHA256 $Asset.FullName).Hash.ToLowerInvariant()
+            "$Hash  $($Asset.Name)"
+          }
+          $Lines | Set-Content -Encoding ascii release\SHA256SUMS.txt
       - name: Attest portable ZIP provenance
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: release/VisionMacroStudio-Portable-v*.zip
+      - name: Attest Setup EXE provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: release/VisionMacroStudio-Setup-v*.exe
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: VisionMacroStudio-${{ github.ref_name }}-Windows
           path: |
             release/VisionMacroStudio-Portable-v*.zip
+            release/VisionMacroStudio-Setup-v*.exe
             release/SHA256SUMS.txt
           if-no-files-found: error
-      - name: Create or update GitHub pre-release
+          compression-level: 0
+      - name: Create or update GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,6 +90,6 @@ jobs:
           $Tag = "${{ github.ref_name }}"
           $Exists = gh release view $Tag 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $Tag --title "Vision Macro Studio $Tag" --notes-file RELEASE_NOTES.md --prerelease
+            gh release create $Tag --verify-tag --title "Vision Macro Studio $Tag" --notes-file RELEASE_NOTES.md
           }
-          gh release upload $Tag release\VisionMacroStudio-Portable-v*.zip release\SHA256SUMS.txt --clobber
+          gh release upload $Tag release\VisionMacroStudio-Portable-v*.zip release\VisionMacroStudio-Setup-v*.exe release\SHA256SUMS.txt --clobber

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.9.0 Public Release Candidate</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">AGPL-3.0-or-later</a>
+  <strong>Current version: 1.0.0 Public Release</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">AGPL-3.0-or-later</a>
 </p>
 
 ![Tests](https://github.com/dwatkins91/VisionMacroStudio/actions/workflows/tests.yml/badge.svg)
@@ -37,7 +37,7 @@ The application uses:
 > Vision Macro Studio is an experimental Windows-first project. Automated input can reach the wrong window when the screen changes. Test macros one step at a time and keep the emergency-stop hotkey available.
 
 > [!NOTE]
-> Version 0.9.0 is the public release candidate. The working capture, training, testing, macro, model-assistance, and sharing features are present; clean-machine validation and trusted code signing remain gates for v1.0.0.
+> Version 1.0.0 is the first public release. The installer and portable build are currently unsigned, so verify release checksums and review the Windows security notice before running them.
 
 ## Highlights
 
@@ -53,7 +53,26 @@ The application uses:
 | Support | Privacy-safe diagnostic ZIPs, local crash reports, user guide, validation checklist, and structured GitHub issue forms |
 | Safety | F12 emergency stop, interruptible waits and mouse travel, automatic input release, explicit legal notice, and no telemetry |
 
-## Quick start on Windows
+## Download and install on Windows
+
+Open the [latest GitHub release](https://github.com/dwatkins91/VisionMacroStudio/releases/latest), expand **Assets**, and download:
+
+- `VisionMacroStudio-Setup-v1.0.0.exe` for a normal per-user installation; or
+- `VisionMacroStudio-Portable-v1.0.0.zip` for a self-contained no-install copy.
+
+Download `SHA256SUMS.txt` from the same release to verify either package. The
+downloads already include Python and the required libraries.
+
+> [!WARNING]
+> Version 1.0.0 is not Authenticode signed. Windows may display **Unknown publisher**,
+> SmartScreen may warn, and Smart App Control or an organizational policy may block
+> installation or a native dependency. Do not disable Windows security protections.
+
+After installation, open Vision Macro Studio from the Start menu, complete the
+Welcome guide, and choose **Help → Check My Computer**. For the portable edition,
+extract the entire ZIP to a short normal path before opening `VisionMacroStudio.exe`.
+
+## Run from source
 
 ### Requirements
 
@@ -61,7 +80,7 @@ The application uses:
 - 64-bit Python 3.10 or newer
 - Several gigabytes of free space for PyTorch, models, and training output
 
-### Automatic setup
+### Automatic source setup
 
 1. Clone this repository with GitHub Desktop, or download and extract the source ZIP.
 2. Double-click `run_app.bat`.
@@ -81,7 +100,7 @@ py -m venv .venv
 & ".\.venv\Scripts\python.exe" -m app.main
 ```
 
-Do not disable Windows security protections simply to run this project. Source builds and portable builds are currently unsigned, so Smart App Control or an organizational application-control policy may still block a native dependency. A trusted code-signed distribution is the long-term solution.
+Do not disable Windows security protections simply to run this project. Source builds and downloadable binaries are currently unsigned, so Smart App Control or an organizational application-control policy may still block a native dependency.
 
 At first launch, the Welcome guide explains storage and safety. Run **Help → Check My Computer** to import every required component, verify writable folders, confirm screen access, and report whether CPU or GPU inference is available. The check does not capture, save, or upload the screen.
 
@@ -261,7 +280,7 @@ py -m compileall app tests tools
 py tools\validate_release.py
 ```
 
-## Build a portable Windows edition
+## Build the Windows release
 
 The portable builder must run on 64-bit Windows from a Python environment that can already open the application:
 
@@ -271,11 +290,21 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.9.0.zip`
+`release\VisionMacroStudio-Portable-v1.0.0.zip`
+
+Install Inno Setup 6, then build and silently self-test the standard installer:
+
+```powershell
+& ".\.venv\Scripts\python.exe" tools\build_windows_installer.py
+```
+
+This writes:
+
+`release\VisionMacroStudio-Setup-v1.0.0.exe`
 
 The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. It includes the AGPL license, corresponding-source offer, privacy guide, build manifest, third-party notices, available dependency license texts, and `SHA256SUMS.txt`. The resulting binaries remain unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
 
-Pushing an exact version tag runs the Windows release workflow, source tests, packaged self-test, checksum generation, provenance attestation, and GitHub pre-release creation. See [GitHub setup](docs/GITHUB_SETUP.md) and the [release checklist](docs/RELEASE_CHECKLIST.md).
+Pushing an exact version tag runs the Windows release workflow, source tests, portable and installed self-tests, checksum generation, provenance attestation, and GitHub release creation. See [GitHub setup](docs/GITHUB_SETUP.md) and the [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Current limitations
 

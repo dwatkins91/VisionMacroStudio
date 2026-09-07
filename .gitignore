@@ -27,6 +27,7 @@ models/
 
 # Portable and PyInstaller build output
 .portable_build/
+.installer_test/
 build/
 dist/
 release/

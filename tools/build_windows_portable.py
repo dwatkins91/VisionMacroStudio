@@ -146,6 +146,7 @@ def prepare_build_directories() -> None:
 
 
 def run_pyinstaller() -> Path:
+    write_windows_version_info()
     print()
     print("Building the Windows application. Torch makes this a large build;")
     print("ten to thirty minutes is normal, and the window may be quiet for a while.")
@@ -170,6 +171,48 @@ def run_pyinstaller() -> Path:
     if not executable.is_file():
         raise RuntimeError(f"Build completed without producing {executable}.")
     return bundle
+
+
+def write_windows_version_info() -> Path:
+    """Create Windows file metadata that always matches the application version."""
+    parts = [int(value) for value in app_version().split(".")]
+    if len(parts) > 4 or any(value < 0 or value > 65535 for value in parts):
+        raise RuntimeError("The application version cannot be represented by Windows.")
+    parts.extend([0] * (4 - len(parts)))
+    dotted = ".".join(str(value) for value in parts)
+    path = BUILD_ROOT / "windows_version_info.txt"
+    path.write_text(
+        f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=({', '.join(str(value) for value in parts)}),
+    prodvers=({', '.join(str(value) for value in parts)}),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [StringStruct('CompanyName', 'Dillard Watkins'),
+         StringStruct('FileDescription', 'Vision Macro Studio'),
+         StringStruct('FileVersion', '{dotted}'),
+         StringStruct('InternalName', 'VisionMacroStudio'),
+         StringStruct('LegalCopyright', 'Copyright (c) 2026 Dillard Watkins'),
+         StringStruct('OriginalFilename', 'VisionMacroStudio.exe'),
+         StringStruct('ProductName', 'Vision Macro Studio'),
+         StringStruct('ProductVersion', '{dotted}')])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+""",
+        encoding="utf-8",
+    )
+    return path
 
 
 def verify_bundle(bundle: Path) -> None:

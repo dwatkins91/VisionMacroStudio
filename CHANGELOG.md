@@ -2,8 +2,17 @@
 
 All notable changes to Vision Macro Studio are documented here.
 
-The project is currently in early development. Version numbers below describe
-working snapshots rather than a promise of backward compatibility.
+Version numbers below describe public releases and earlier development snapshots.
+
+## [1.0.0] - 2026-09-07
+
+- Promoted the tested public release candidate to the first stable public release while retaining compatibility with existing projects, models, and format-v1/v2/v3 macros.
+- Added an Inno Setup Windows installer with per-user installation, Start menu and optional desktop shortcuts, a visible unsigned-release notice, and normal Windows uninstallation.
+- Added automated silent installation and packaged-runtime self-testing before the Setup EXE can be attached to a release.
+- Added matching Windows file metadata and version information to the application executable and installer.
+- Expanded the tagged GitHub release workflow to publish the Setup EXE and portable ZIP together, checksum both assets, and attest their build provenance.
+- Replaced release-candidate labels and documentation with the 1.0.0 public-release identity.
+- Documented that the release remains Authenticode-unsigned and might be warned about or blocked by Windows security policy without instructing users to disable protections.
 
 ## [0.9.0] - 2026-09-07
 

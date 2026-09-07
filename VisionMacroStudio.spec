@@ -59,6 +59,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     icon=str(project_root / "app" / "assets" / "vision_macro_eye.ico"),
+    version=str(project_root / ".portable_build" / "windows_version_info.txt"),
 )
 
 coll = COLLECT(

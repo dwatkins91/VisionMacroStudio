@@ -31,6 +31,9 @@ def validate(tag: str = "") -> list[str]:
         "SUPPORT.md",
         "CONTRIBUTING.md",
         "RELEASE_NOTES.md",
+        "INSTALLER_README.txt",
+        "installer/VisionMacroStudio.iss",
+        "tools/build_windows_installer.py",
         "docs/PRIVACY.md",
         "docs/USER_GUIDE.md",
         "docs/RELEASE_CHECKLIST.md",
@@ -49,10 +52,16 @@ def validate(tag: str = "") -> list[str]:
     changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     source_offer = (PROJECT_ROOT / "SOURCE_OFFER.txt").read_text(encoding="utf-8")
     portable = (PROJECT_ROOT / "PORTABLE_README.txt").read_text(encoding="utf-8")
+    installer_readme = (PROJECT_ROOT / "INSTALLER_README.txt").read_text(
+        encoding="utf-8"
+    )
+    release_notes = (PROJECT_ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     for name, content in (
         ("README.md", readme),
         ("SOURCE_OFFER.txt", source_offer),
         ("PORTABLE_README.txt", portable),
+        ("INSTALLER_README.txt", installer_readme),
+        ("RELEASE_NOTES.md", release_notes),
     ):
         if version not in content:
             errors.append(f"{name} does not mention version {version}.")
@@ -60,6 +69,16 @@ def validate(tag: str = "") -> list[str]:
         errors.append(f"CHANGELOG.md has no {version} section.")
     if f"tree/v{version}" not in source_offer:
         errors.append("SOURCE_OFFER.txt does not point to the matching source tag.")
+    workflow = (PROJECT_ROOT / ".github/workflows/windows-release.yml").read_text(
+        encoding="utf-8"
+    )
+    for expected in (
+        "tools/build_windows_installer.py",
+        "VisionMacroStudio-Setup-v*.exe",
+        "SHA256SUMS.txt",
+    ):
+        if expected not in workflow:
+            errors.append(f"Windows release workflow does not reference {expected}.")
     if tag and tag != f"v{version}":
         errors.append(f"Tag {tag!r} does not match application version v{version}.")
 

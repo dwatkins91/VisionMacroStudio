@@ -1,40 +1,44 @@
-# Vision Macro Studio v0.9.0 — Public Release Candidate
+# Vision Macro Studio v1.0.0 — First Public Release
 
-This release candidate combines the proven capture-to-macro workflow with the
-public-release safeguards, documentation, and reproducible packaging needed for
-broader testing.
+Vision Macro Studio 1.0.0 is the first complete public release of the proven
+capture-to-macro workflow. It includes a standard Windows installer, a portable
+edition, public source, automated tests, checksums, and build provenance.
 
 ## Highlights
 
-- First-run welcome with workflow, safety, privacy, and storage guidance
-- Check My Computer readiness report for dependencies, folders, displays, and GPU
-- Built-in sample project with a completely input-free counter/branch tutorial
-- Privacy-safe diagnostic ZIP and scrubbed local crash reports
-- Advanced macro debugger, stability controls, regions, portable coordinates,
-  variables, counters, submacros, validation, flow view, and safe drag reordering
-- Assisted labeling, dataset-quality analysis, model lineage, reports, notes, and
-  side-by-side per-class model comparison
-- Automated source checks, CodeQL, tagged Windows builds, packaged self-test,
-  SHA-256 checksum, and build provenance attestation
-- GNU AGPL-3.0-or-later licensing under Dillard Watkins with exact-source and
-  third-party notices included in the portable package
+- Capture and label multiple screen objects with global-hotkey and multi-monitor support
+- Train, refine, test, compare, and explicitly accept local YOLO models
+- Build visual macros with detection branches, stability controls, search regions,
+  portable coordinates, variables, counters, reusable submacros, and recovery routes
+- Preview steps without input, run one step or loop, validate macro logic, inspect the
+  connected flow view, and stop live automation with F12
+- Use assisted labeling, dataset-quality analysis, per-class model metrics, diagnostics,
+  a first-run guide, and a safe built-in sample project
+- Install normally with `VisionMacroStudio-Setup-v1.0.0.exe`, or use the self-contained
+  portable ZIP without installing Python or its libraries
+- Verify both downloads with `SHA256SUMS.txt` and GitHub build-provenance attestations
+- Inspect, modify, and redistribute the complete AGPL-3.0-or-later source under
+  Dillard Watkins
 
-## Important release-candidate warning
+## Important unsigned-release notice
 
-The Windows binaries are not yet code-signed. Smart App Control or an
-organization's application-control policy may block the executable or a native
-dependency. Do not disable Windows security protections to run it. Code signing
-and expanded clean-machine testing remain v1.0.0 release gates.
+The Setup EXE and portable application are not Authenticode signed. Windows may
+display **Unknown publisher**, Microsoft Defender SmartScreen may warn, and Smart App
+Control or an organizational application-control policy may block installation or a
+native dependency. Do not disable Windows security protections to run the application.
 
-## Download and verify
+## Download and install
 
-1. Download `VisionMacroStudio-Portable-v0.9.0.zip` and `SHA256SUMS.txt` from
-   this release.
-2. Compare the ZIP's SHA-256 hash with the published value.
-3. Extract the entire ZIP to a short normal path such as `D:\VMS-0.9.0`.
-4. Read `START_HERE.txt`, then open `VisionMacroStudio.exe`.
-5. Complete Welcome and run **Help → Check My Computer**.
+1. Under **Assets**, download `VisionMacroStudio-Setup-v1.0.0.exe` and
+   `SHA256SUMS.txt`.
+2. Compare the installer's SHA-256 hash with the published value.
+3. Run the installer and review the unsigned-release notice before continuing.
+4. Open Vision Macro Studio, complete Welcome, and run **Help → Check My Computer**.
 
-Please use the structured GitHub issue form for bugs. Review diagnostic ZIPs
-before attaching them publicly and never share private captures, credentials,
-or model files unintentionally.
+For a no-install alternative, download `VisionMacroStudio-Portable-v1.0.0.zip`,
+extract the entire ZIP to a short normal path such as `D:\VMS-1.0.0`, read
+`START_HERE.txt`, and open `VisionMacroStudio.exe`.
+
+Please use the structured GitHub issue form for bugs. Review diagnostic ZIPs before
+attaching them publicly, and never share private captures, credentials, datasets, or
+model files unintentionally.

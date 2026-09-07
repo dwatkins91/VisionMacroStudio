@@ -1,7 +1,7 @@
 # Public release checklist
 
-Use this checklist for a release candidate and repeat it against the exact ZIP
-downloaded from GitHub Releases.
+Use this checklist for a public release and repeat it against the exact Setup EXE
+and portable ZIP downloaded from GitHub Releases.
 
 ## Source and policy
 
@@ -18,7 +18,7 @@ downloaded from GitHub Releases.
 
 - [ ] Test on a Windows account and folder that were not used to build it.
 - [ ] Extract the ZIP fully; do not run from inside the ZIP.
-- [ ] Confirm the eye icon and version 0.9.0 RC title.
+- [ ] Confirm the eye icon and version 1.0.0 title with no RC label.
 - [ ] Complete first-run onboarding.
 - [ ] Run Check My Computer and save/copy its report.
 - [ ] Create the sample project and run the safe counter tutorial.
@@ -30,13 +30,22 @@ downloaded from GitHub Releases.
 - [ ] Create and inspect a diagnostic package.
 - [ ] Confirm no source-machine project path appears in settings or output.
 
+## Installed edition
+
+- [ ] Install `VisionMacroStudio-Setup-v1.0.0.exe` for the current user.
+- [ ] Confirm the unsigned-publisher warning is accurate and understandable.
+- [ ] Confirm Start menu and optional desktop shortcuts open the application.
+- [ ] Run Check My Computer from the installed application.
+- [ ] Confirm personal projects are not installed with the application.
+- [ ] Uninstall from Windows Settings and confirm project data remains intact.
+
 ## Distribution
 
-- [ ] Tag the exact tested commit `v0.9.0`.
-- [ ] Automated Windows build and packaged self-test pass.
-- [ ] Release ZIP checksum matches `SHA256SUMS.txt`.
-- [ ] Download the public release asset and repeat the clean test.
-- [ ] Mark the GitHub release as a **pre-release** while it remains unsigned.
+- [ ] Manually run the Windows Release workflow on `main` before tagging.
+- [ ] Download and test the unsigned Setup EXE from that workflow artifact.
+- [ ] Tag the exact tested commit `v1.0.0`.
+- [ ] Automated Windows portable and installer self-tests pass.
+- [ ] Setup EXE and portable ZIP checksums match `SHA256SUMS.txt`.
+- [ ] Download both public release assets and repeat the relevant clean tests.
+- [ ] Publish it as a normal GitHub release, not a pre-release.
 - [ ] State clearly that Smart App Control may block unsigned native components.
-
-Code signing and clean-machine trust testing remain release gates for v1.0.0.

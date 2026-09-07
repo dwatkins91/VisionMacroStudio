@@ -11,10 +11,17 @@ from app.automation.control import (
     destination_steps,
     object_names,
 )
+from app.automation.coordinates import (
+    COORDINATE_MODES,
+    CoordinateReferenceError,
+    checked_normalized_region,
+    coordinate_mode,
+)
 
 
 MACRO_FILE_FORMAT = "vision-macro-studio/macro"
-MACRO_FILE_VERSION = 1
+MACRO_FILE_VERSION = 2
+SUPPORTED_MACRO_FILE_VERSIONS = {1, 2}
 MAX_MACRO_FILE_BYTES = 5 * 1024 * 1024
 COORDINATE_ACTIONS = {"MOVE_MOUSE", "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"}
 DETECTION_ACTIONS = {
@@ -51,6 +58,11 @@ def validate_macro(macro: Any) -> dict[str, Any]:
         raise MacroFormatError("The macro does not contain a valid step list.")
     if len(steps) > 10_000:
         raise MacroFormatError("The macro contains too many steps.")
+    if macro.get("detection_region") is not None:
+        try:
+            checked_normalized_region(macro["detection_region"])
+        except CoordinateReferenceError as exc:
+            raise MacroFormatError(f"Invalid detection region: {exc}") from exc
     step_count = len(steps)
     for index, step in enumerate(steps, 1):
         if not isinstance(step, dict):
@@ -98,13 +110,33 @@ def validate_macro(macro: Any) -> dict[str, Any]:
                     f"Step {index} points to missing step {target}."
                 )
         if action in COORDINATE_ACTIONS:
-            for axis in ("x", "y"):
+            raw_mode = step.get("coordinate_mode", "absolute")
+            if str(raw_mode) not in COORDINATE_MODES:
+                raise MacroFormatError(
+                    f"Step {index} uses an unsupported coordinate basis: {raw_mode!r}."
+                )
+            mode = coordinate_mode(raw_mode)
+            if mode == "absolute":
+                required_values = ("x", "y")
+            else:
+                required_values = ("relative_x", "relative_y")
+            for axis in required_values:
                 try:
-                    int(step[axis])
+                    value = float(step[axis])
                 except (KeyError, TypeError, ValueError) as exc:
                     raise MacroFormatError(
-                        f"Step {index} does not have a valid screen {axis.upper()} coordinate."
+                        f"Step {index} does not have a valid {axis.replace('_', ' ')} value."
                     ) from exc
+                if axis.startswith("relative_") and not 0 <= value <= 1:
+                    raise MacroFormatError(
+                        f"Step {index} relative coordinates must be between 0 and 1."
+                    )
+            if mode == "window_relative" and not str(
+                step.get("window_title", "")
+            ).strip():
+                raise MacroFormatError(
+                    f"Step {index} does not identify an application window."
+                )
         if action in DETECTION_ACTIONS:
             try:
                 required = int(step.get("required_consecutive_detections", 1))
@@ -188,12 +220,13 @@ def import_macro_file(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         raise MacroFormatError("The macro file must contain a JSON object.")
     if payload.get("format") == MACRO_FILE_FORMAT:
         version = payload.get("format_version")
-        if version != MACRO_FILE_VERSION:
+        if version not in SUPPORTED_MACRO_FILE_VERSIONS:
             raise MacroFormatError(
                 f"Macro format version {version!r} is not supported by this app."
             )
         macro = validate_macro(payload.get("macro"))
         metadata = {
+            "format_version": version,
             "app_version": payload.get("app_version"),
             "exported_at": payload.get("exported_at"),
             "screen_layout": payload.get("screen_layout", []),
@@ -228,5 +261,13 @@ def referenced_objects(macro: dict[str, Any]) -> list[str]:
 def has_coordinate_steps(macro: dict[str, Any]) -> bool:
     return any(
         step.get("action") in COORDINATE_ACTIONS
+        for step in macro.get("steps", [])
+    )
+
+
+def has_absolute_coordinate_steps(macro: dict[str, Any]) -> bool:
+    return any(
+        step.get("action") in COORDINATE_ACTIONS
+        and coordinate_mode(step.get("coordinate_mode", "absolute")) == "absolute"
         for step in macro.get("steps", [])
     )

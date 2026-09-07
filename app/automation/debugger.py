@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.automation.control import destination_steps, object_names
+from app.automation.coordinates import (
+    CoordinateReferenceError,
+    coordinate_mode_label,
+    resolve_step_coordinate,
+)
 from app.vision.detector import Detector
 
 
@@ -93,6 +98,7 @@ def analyze_step(
     step_count: int,
     detections: list[dict[str, Any]] | None = None,
     origin: tuple[int, int] = (0, 0),
+    watch_bounds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe one macro step without sending mouse or keyboard input."""
 
@@ -256,8 +262,6 @@ def analyze_step(
         value = f"{minimum:g} second(s)" if minimum == maximum else f"{minimum:g}–{maximum:g} seconds"
         decision = f"PREVIEW — would wait {value}, then continue to {next_label}."
     elif action in SCREEN_ACTIONS:
-        x, y = int(step.get("x", 0)), int(step.get("y", 0))
-        marker = (x, y)
         if action == "MOVE_MOUSE":
             verb = "move the mouse"
         elif action == "DOUBLE_CLICK":
@@ -266,11 +270,27 @@ def analyze_step(
             verb = "right-click"
         else:
             verb = "left-click"
-        offset = int(step.get("random_offset", 0))
-        decision = (
-            f"PREVIEW — would {verb} at ({x}, {y})"
-            f"{' with a ±' + str(offset) + ' px offset' if offset else ''}."
-        )
+        try:
+            bounds = watch_bounds or step.get("reference_bounds") or {
+                "left": 0,
+                "top": 0,
+                "width": 1920,
+                "height": 1080,
+            }
+            x, y, basis = resolve_step_coordinate(step, bounds)
+            marker = (x, y)
+            offset = int(step.get("random_offset", 0))
+            decision = (
+                f"PREVIEW — would {verb} at ({x}, {y}) using {basis}"
+                f"{' with a ±' + str(offset) + ' px offset' if offset else ''}."
+            )
+            details.append(
+                "Coordinate basis: "
+                + coordinate_mode_label(step.get("coordinate_mode", "absolute"))
+                + "."
+            )
+        except CoordinateReferenceError as exc:
+            decision = f"INVALID — {exc}"
     elif action == "PRESS_KEY":
         decision = f"PREVIEW — would press {step.get('value', 'space')!s}."
     elif action == "TYPE_TEXT":

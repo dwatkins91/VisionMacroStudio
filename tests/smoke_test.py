@@ -20,10 +20,19 @@ from app.automation.control import (  # noqa: E402
     randomized_point,
     randomized_seconds,
 )
+from app.automation.coordinates import (  # noqa: E402
+    absolute_region_from_normalized,
+    find_window_by_title,
+    normalized_region_from_absolute,
+    point_from_relative,
+    relative_point,
+    resolve_step_coordinate,
+)
 from app.automation.debugger import analyze_step, step_needs_detection  # noqa: E402
 from app.automation.macro_io import (  # noqa: E402
     MacroFormatError,
     export_macro_file,
+    has_absolute_coordinate_steps,
     has_coordinate_steps,
     import_macro_file,
     referenced_objects,
@@ -128,6 +137,54 @@ def exercise_stability_engine() -> None:
     )
     assert ignored == 1 and allowed == [far_away]
 
+    from app.capture import grabber
+
+    requested_bounds = []
+
+    class FakeRaw:
+        def __init__(self, width: int, height: int) -> None:
+            self.size = (width, height)
+            self.bgra = bytes((0, 0, 0, 255)) * width * height
+
+    class FakeCapture:
+        monitors = [
+            {"left": 0, "top": 0, "width": 300, "height": 120},
+            {"left": 100, "top": 20, "width": 200, "height": 100},
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def grab(self, bounds):
+            requested_bounds.append(dict(bounds))
+            return FakeRaw(int(bounds["width"]), int(bounds["height"]))
+
+    original_mss = grabber.mss.mss
+    try:
+        grabber.mss.mss = FakeCapture
+        region_grab = grabber.grab_screen(
+            1, {"x": 0.25, "y": 0.2, "width": 0.5, "height": 0.5}
+        )
+    finally:
+        grabber.mss.mss = original_mss
+    assert requested_bounds[-1] == {
+        "left": 150,
+        "top": 40,
+        "width": 100,
+        "height": 50,
+    }
+    assert (region_grab.left, region_grab.top) == (150, 40)
+    assert region_grab.image.size == (100, 50)
+    assert region_grab.source_bounds == {
+        "left": 100,
+        "top": 20,
+        "width": 200,
+        "height": 100,
+    }
+
 
 def main() -> None:
     exercise_stability_engine()
@@ -145,6 +202,75 @@ def main() -> None:
         wait_seconds = randomized_seconds(6, 9)
         assert 6 <= wait_seconds <= 9
     assert randomized_seconds(7, 7) == 7
+    watch_bounds = {"left": 1920, "top": 0, "width": 1920, "height": 1080}
+    assert relative_point(2400, 540, watch_bounds) == (0.25, 0.5)
+    assert point_from_relative(
+        1,
+        1,
+        {"left": -1920, "top": 0, "width": 1920, "height": 1080},
+    ) == (-1, 1079)
+    scaled_x, scaled_y, scaled_basis = resolve_step_coordinate(
+        {
+            "coordinate_mode": "watch_relative",
+            "relative_x": 0.25,
+            "relative_y": 0.5,
+        },
+        {"left": 0, "top": 0, "width": 2560, "height": 1440},
+    )
+    assert (scaled_x, scaled_y) == (640, 720)
+    assert "scaled" in scaled_basis
+    window_x, window_y, window_basis = resolve_step_coordinate(
+        {
+            "coordinate_mode": "window_relative",
+            "relative_x": 0.5,
+            "relative_y": 0.25,
+            "window_title": "Target App",
+        },
+        watch_bounds,
+        window_finder=lambda _title: {
+            "title": "Target App",
+            "left": 100,
+            "top": 200,
+            "width": 800,
+            "height": 600,
+        },
+    )
+    assert (window_x, window_y) == (500, 350)
+    assert "Target App" in window_basis
+    import app.automation.coordinates as coordinate_tools
+
+    original_window_records = coordinate_tools._window_records
+    try:
+        coordinate_tools._window_records = lambda: [
+            {
+                "title": "Current Document - Target App",
+                "class_name": "TargetWindowClass",
+                "left": 0,
+                "top": 0,
+                "width": 800,
+                "height": 600,
+            }
+        ]
+        assert (
+            find_window_by_title("Old Document - Target App", "TargetWindowClass")
+            is not None
+        )
+    finally:
+        coordinate_tools._window_records = original_window_records
+    normalized_region = normalized_region_from_absolute(
+        {"left": 2400, "top": 270, "width": 960, "height": 540},
+        watch_bounds,
+    )
+    assert normalized_region == {
+        "x": 0.25,
+        "y": 0.25,
+        "width": 0.5,
+        "height": 0.5,
+    }
+    assert absolute_region_from_normalized(
+        normalized_region,
+        {"left": 0, "top": 0, "width": 2560, "height": 1440},
+    ) == {"left": 640, "top": 360, "width": 1280, "height": 720}
     try:
         destination_steps("three")
     except ValueError:
@@ -203,6 +329,19 @@ def main() -> None:
     )
     assert coordinate_report["marker"] == (640, 480)
     assert "No live action" not in coordinate_report["decision"]
+    portable_coordinate_report = analyze_step(
+        {
+            "action": "CLICK",
+            "coordinate_mode": "watch_relative",
+            "relative_x": 0.75,
+            "relative_y": 0.25,
+        },
+        4,
+        5,
+        watch_bounds={"left": 0, "top": 0, "width": 2000, "height": 1000},
+    )
+    assert portable_coordinate_report["marker"] == (1500, 250)
+    assert "scaled" in portable_coordinate_report["decision"]
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
         project = ProjectManager()
@@ -229,6 +368,7 @@ def main() -> None:
             {
                 "name": "Conditional Smoke Macro",
                 "time_limit_minutes": 12.5,
+                "detection_region": normalized_region,
                 "steps": [
                     {
                         "enabled": True,
@@ -262,6 +402,15 @@ def main() -> None:
                         "duration": 2,
                         "duration_max": 4,
                     },
+                    {
+                        "enabled": True,
+                        "action": "CLICK",
+                        "coordinate_mode": "watch_relative",
+                        "relative_x": 0.25,
+                        "relative_y": 0.75,
+                        "x": 2400,
+                        "y": 810,
+                    },
                 ],
             }
         )
@@ -270,6 +419,7 @@ def main() -> None:
         reopened.open(project.project_file)
         saved_macro = reopened.data["macros"][0]
         assert saved_macro["time_limit_minutes"] == 12.5
+        assert saved_macro["detection_region"] == normalized_region
         assert saved_macro["steps"][0]["objects"] == ["Start_Button", "Target"]
         assert saved_macro["steps"][0]["required_consecutive_detections"] == 2
         assert saved_macro["steps"][0]["max_detection_attempts"] == 25
@@ -281,6 +431,7 @@ def main() -> None:
         assert saved_macro["steps"][3]["action"] == "RIGHT_CLICK_OBJECT"
         assert saved_macro["steps"][3]["timeout_max"] == 12
         assert saved_macro["steps"][4]["duration_max"] == 4
+        assert saved_macro["steps"][5]["coordinate_mode"] == "watch_relative"
         macro_file = root / "shared_macro.vmsmacro.json"
         export_macro_file(
             macro_file,
@@ -290,10 +441,12 @@ def main() -> None:
         )
         shared_macro, metadata = import_macro_file(macro_file)
         assert shared_macro == saved_macro
+        assert metadata["format_version"] == 2
         assert metadata["app_version"] == "test-version"
         assert metadata["screen_layout"][0]["width"] == 1920
         assert referenced_objects(shared_macro) == ["Start_Button", "Target"]
-        assert not has_coordinate_steps(shared_macro)
+        assert has_coordinate_steps(shared_macro)
+        assert not has_absolute_coordinate_steps(shared_macro)
         assert unique_macro_name("Test", ["Test", "Test (Imported)"]) == (
             "Test (Imported 2)"
         )
@@ -304,6 +457,17 @@ def main() -> None:
         )
         coordinate_macro, _metadata = import_macro_file(raw_coordinate_macro)
         assert has_coordinate_steps(coordinate_macro)
+        assert has_absolute_coordinate_steps(coordinate_macro)
+        legacy_macro_file = root / "legacy_v1_macro.json"
+        legacy_macro_file.write_text(
+            '{"format":"vision-macro-studio/macro","format_version":1,'
+            '"macro":{"name":"Legacy","steps":[{"action":"CLICK",'
+            '"x":12,"y":34}]}}',
+            encoding="utf-8",
+        )
+        legacy_macro, legacy_metadata = import_macro_file(legacy_macro_file)
+        assert legacy_macro["name"] == "Legacy"
+        assert legacy_metadata["format_version"] == 1
         invalid_macro = root / "invalid_macro.json"
         invalid_macro.write_text(
             '{"name":"Invalid","steps":[{"action":"NOT_REAL"}]}',
@@ -327,6 +491,18 @@ def main() -> None:
             pass
         else:
             raise AssertionError("Invalid stability limits should be rejected")
+        invalid_region_macro = root / "invalid_region_macro.json"
+        invalid_region_macro.write_text(
+            '{"name":"Invalid Region","detection_region":'
+            '{"x":0.8,"y":0.2,"width":0.4,"height":0.5},"steps":[]}',
+            encoding="utf-8",
+        )
+        try:
+            import_macro_file(invalid_region_macro)
+        except MacroFormatError:
+            pass
+        else:
+            raise AssertionError("Out-of-bounds detection regions should be rejected")
         dummy_model = project.path("models/Smoke_Model_v1.pt")
         dummy_model.write_bytes(b"test model placeholder")
         first_model = register_model(

@@ -37,6 +37,8 @@ def portable_self_test(report_path: Path) -> int:
         "torchvision",
         "ultralytics",
         "yaml",
+        "app.automation.coordinates",
+        "app.gui.region_picker",
     )
     passed = True
     for module_name in modules:

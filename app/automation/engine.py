@@ -14,7 +14,11 @@ from app.automation.control import (
     randomized_point,
     randomized_seconds,
 )
-from app.capture.grabber import grab_screen
+from app.automation.coordinates import (
+    detection_region_label,
+    resolve_step_coordinate,
+)
+from app.capture.grabber import grab_screen, monitor_bounds
 from app.vision.detector import Detector, class_name_key
 
 
@@ -56,6 +60,7 @@ class MacroWorker(QObject):
         time_limit_seconds: float = 0.0,
         monitor_index: int = 0,
         one_loop: bool = False,
+        detection_region: dict[str, float] | None = None,
     ) -> None:
         super().__init__()
         self.macro = macro
@@ -64,6 +69,7 @@ class MacroWorker(QObject):
         self.time_limit_seconds = max(0.0, float(time_limit_seconds))
         self.monitor_index = max(0, int(monitor_index))
         self.one_loop = bool(one_loop)
+        self.detection_region = dict(detection_region) if detection_region else None
         self.stop_event = threading.Event()
         self._deadline: float | None = None
         self._ended_by_time_limit = False
@@ -198,7 +204,7 @@ class MacroWorker(QObject):
         confidence: float,
         respect_click_cooldown: bool = True,
     ) -> tuple[dict | None, tuple[int, int], int]:
-        grab = grab_screen(self.monitor_index)
+        grab = grab_screen(self.monitor_index, self.detection_region)
         detections = detector.predict(grab.image, min(confidence, 0.05))
         if self._check_time_limit():
             return None, (grab.left, grab.top), 0
@@ -239,7 +245,7 @@ class MacroWorker(QObject):
         confidence: float,
         respect_click_cooldown: bool = True,
     ) -> tuple[str | None, dict | None, tuple[int, int], int]:
-        grab = grab_screen(self.monitor_index)
+        grab = grab_screen(self.monitor_index, self.detection_region)
         detections = detector.predict(grab.image, min(confidence, 0.05))
         if self._check_time_limit():
             return None, None, (grab.left, grab.top), 0
@@ -560,24 +566,34 @@ class MacroWorker(QObject):
             self.log.emit(f"Waiting {wait_seconds:.2f} seconds.")
             self._interruptible_sleep(wait_seconds)
         elif action == "MOVE_MOUSE":
+            target_x, target_y, basis = resolve_step_coordinate(
+                step, monitor_bounds(self.monitor_index)
+            )
+            self._decision(
+                f"COORDINATE — Resolved {basis} to ({target_x}, {target_y})."
+            )
             self._smooth_move(
-                int(step.get("x", 0)),
-                int(step.get("y", 0)),
+                target_x,
+                target_y,
                 float(step.get("move_duration", 0.35)),
             )
         elif action in ("CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"):
-            target_x, target_y = self._mouse.position
-            if "x" in step and "y" in step:
-                target_x, target_y = randomized_point(
-                    int(step["x"]),
-                    int(step["y"]),
-                    int(step.get("random_offset", 0)),
-                )
-                self._smooth_move(
-                    target_x,
-                    target_y,
-                    float(step.get("move_duration", 0.35)),
-                )
+            resolved_x, resolved_y, basis = resolve_step_coordinate(
+                step, monitor_bounds(self.monitor_index)
+            )
+            target_x, target_y = randomized_point(
+                resolved_x,
+                resolved_y,
+                int(step.get("random_offset", 0)),
+            )
+            self._decision(
+                f"COORDINATE — Resolved {basis} to ({resolved_x}, {resolved_y})."
+            )
+            self._smooth_move(
+                target_x,
+                target_y,
+                float(step.get("move_duration", 0.35)),
+            )
             if self._check_time_limit():
                 return
             button = Button.right if action == "RIGHT_CLICK" else Button.left
@@ -643,6 +659,14 @@ class MacroWorker(QObject):
                 else f"monitor {self.monitor_index}"
             )
             self.log.emit(f"Detection source: {source}.")
+            if self.detection_region:
+                self.log.emit(
+                    "Detection region: "
+                    + detection_region_label(self.detection_region)
+                    + "."
+                )
+            else:
+                self.log.emit("Detection region: full Watch source.")
             if self.time_limit_seconds > 0:
                 self.log.emit(
                     f"Automatic stop is set for {self.time_limit_seconds / 60:g} minute(s)."

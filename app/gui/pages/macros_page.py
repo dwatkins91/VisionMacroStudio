@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
@@ -25,6 +26,12 @@ from PySide6.QtWidgets import (
 )
 
 from app import __version__
+from app.automation.coordinates import (
+    absolute_region_from_normalized,
+    coordinate_mode,
+    detection_region_label,
+    normalized_region_from_absolute,
+)
 from app.automation.debugger import (
     analyze_step,
     step_needs_detection,
@@ -35,16 +42,18 @@ from app.automation.control import destination_steps, object_names
 from app.automation.macro_io import (
     MacroFormatError,
     export_macro_file,
+    has_absolute_coordinate_steps,
     has_coordinate_steps,
     import_macro_file,
     referenced_objects,
     unique_macro_name,
 )
 from app.automation.recorder import MacroRecorder
-from app.capture.grabber import grab_screen, list_monitors
+from app.capture.grabber import grab_screen, list_monitors, monitor_bounds
 from app.core.context import AppContext
 from app.gui.macro_debug_dialog import MacroDebugDialog
 from app.gui.macro_overlay import MacroStatusOverlay
+from app.gui.region_picker import DetectionRegionPickerOverlay
 from app.gui.step_dialog import StepDialog
 from app.gui.widgets import page_header
 from app.vision.detector import Detector, class_name_key, draw_detections
@@ -62,6 +71,7 @@ class StepDebugWorker(QObject):
         step_count: int,
         model_path: str | None,
         monitor_index: int,
+        detection_region: dict | None = None,
         capture_delay: float = 0.0,
     ) -> None:
         super().__init__()
@@ -70,6 +80,7 @@ class StepDebugWorker(QObject):
         self.step_count = step_count
         self.model_path = model_path
         self.monitor_index = monitor_index
+        self.detection_region = deepcopy(detection_region)
         self.capture_delay = max(0.0, float(capture_delay))
 
     @Slot()
@@ -80,7 +91,12 @@ class StepDebugWorker(QObject):
             if step_needs_screen_preview(self.step):
                 if self.capture_delay:
                     time.sleep(self.capture_delay)
-                grab = grab_screen(self.monitor_index)
+                grab = grab_screen(
+                    self.monitor_index,
+                    self.detection_region
+                    if step_needs_detection(self.step)
+                    else None,
+                )
             if step_needs_detection(self.step):
                 if not self.model_path:
                     raise RuntimeError(
@@ -94,7 +110,13 @@ class StepDebugWorker(QObject):
                 self.step_count,
                 detections,
                 origin,
+                watch_bounds=grab.source_bounds if grab else None,
             )
+            if self.detection_region and step_needs_detection(self.step):
+                report["details"].append(
+                    "Inference was limited to the macro's saved detection region; "
+                    "the preview image shows only that region."
+                )
             if grab is not None:
                 annotated = draw_detections(np.asarray(grab.image), detections)
                 preview_image = Image.fromarray(annotated)
@@ -243,6 +265,24 @@ class MacrosPage(QWidget):
         options_bar.addWidget(QLabel("Stop after"))
         options_bar.addWidget(self.time_limit)
         layout.addLayout(options_bar)
+        region_bar = QHBoxLayout()
+        region_bar.addWidget(QLabel("Detection region"))
+        self.region_status = QLabel("Full Watch source")
+        self.region_status.setObjectName("Subtitle")
+        self.region_status.setToolTip(
+            "Object detection is run only inside this portion of the selected Watch source."
+        )
+        self.draw_region_button = QPushButton("DRAW REGION")
+        self.draw_region_button.setToolTip(
+            "Draw the portion of the selected Watch source used for object detection."
+        )
+        self.draw_region_button.clicked.connect(self.draw_detection_region)
+        self.clear_region_button = QPushButton("USE FULL SOURCE")
+        self.clear_region_button.clicked.connect(self.clear_detection_region)
+        region_bar.addWidget(self.region_status, 1)
+        region_bar.addWidget(self.draw_region_button)
+        region_bar.addWidget(self.clear_region_button)
+        layout.addLayout(region_bar)
         debug_bar = QHBoxLayout()
         debug_bar.addWidget(QLabel("Macro debugger"))
         self.test_button = QPushButton("SAFE STEP PREVIEW (3s)")
@@ -317,6 +357,19 @@ class MacrosPage(QWidget):
             if model
             else "Accept a model before running detection steps."
         )
+        active = macro is not None and self.worker is None and self.debug_worker is None
+        self.draw_region_button.setEnabled(active)
+        self.clear_region_button.setEnabled(
+            active and bool(macro.get("detection_region"))
+        )
+        if macro is None:
+            self.region_status.setText("No macro selected")
+        else:
+            try:
+                label = detection_region_label(macro.get("detection_region"))
+            except Exception:
+                label = "Invalid saved region"
+            self.region_status.setText(label)
 
     def current_macro(self) -> dict | None:
         if not self.context.projects.data:
@@ -438,13 +491,29 @@ class MacrosPage(QWidget):
             return str(step.get("value", ""))
         if action == "WAIT":
             return seconds_range("duration", "duration_max", 1)
-        if action == "MOVE_MOUSE":
-            return f"({step.get('x')}, {step.get('y')})"
-        if action in ("CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"):
-            return (
-                f"({step.get('x')}, {step.get('y')}) "
-                f"±{step.get('random_offset', 0)} px"
+        if action in ("MOVE_MOUSE", "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"):
+            mode = coordinate_mode(step.get("coordinate_mode", "absolute"))
+            offset = (
+                f" · ±{step.get('random_offset', 0)} px"
+                if action != "MOVE_MOUSE"
+                else ""
             )
+            if mode == "watch_relative":
+                position = (
+                    f"Watch {float(step.get('relative_x', 0)):.1%}, "
+                    f"{float(step.get('relative_y', 0)):.1%} · scales"
+                )
+            elif mode == "window_relative":
+                title = str(step.get("window_title", "Window"))
+                if len(title) > 36:
+                    title = title[:33] + "…"
+                position = (
+                    f"{title} · {float(step.get('relative_x', 0)):.1%}, "
+                    f"{float(step.get('relative_y', 0)):.1%} · follows/scales"
+                )
+            else:
+                position = f"Screen ({step.get('x')}, {step.get('y')})"
+            return position + offset
         if action == "REPEAT":
             return f"repeat {step.get('count', 1)} time(s), return to step {step.get('target_step', 1)}"
         if action == "GOTO_STEP":
@@ -599,10 +668,19 @@ class MacrosPage(QWidget):
                 + ", ".join(missing)
                 + "."
             )
-        if has_coordinate_steps(macro):
+        if macro.get("detection_region"):
             notices.append(
-                "This macro contains screen coordinates. Test each coordinate step because screen layouts can differ."
+                "This macro uses a scaled detection region. Verify it against the selected Watch source with Safe Step Preview."
             )
+        if has_coordinate_steps(macro):
+            if has_absolute_coordinate_steps(macro):
+                notices.append(
+                    "This macro contains absolute screen coordinates. Test each one because screen layouts can differ."
+                )
+            else:
+                notices.append(
+                    "This macro uses portable relative coordinates. Safe-preview them against this computer before running."
+                )
             exported_layout = metadata.get("screen_layout", [])
             if exported_layout and monitors and exported_layout != monitors:
                 notices.append("Its exported screen layout differs from this computer.")
@@ -619,6 +697,11 @@ class MacrosPage(QWidget):
     def selected_index(self) -> int:
         return self.table.currentRow()
 
+    def current_watch_bounds(self, macro: dict | None = None) -> dict[str, int]:
+        selected = macro or self.current_macro()
+        monitor_index = int(selected.get("monitor_index", 0)) if selected else 0
+        return monitor_bounds(monitor_index)
+
     def add_step(self) -> None:
         macro = self.current_macro()
         if not macro:
@@ -627,7 +710,11 @@ class MacrosPage(QWidget):
         if not macro:
             return
         classes = self.context.projects.data.get("classes", [])
-        dialog = StepDialog(classes, parent=self)
+        dialog = StepDialog(
+            classes,
+            parent=self,
+            watch_bounds=self.current_watch_bounds(macro),
+        )
         if dialog.exec():
             macro["steps"].append(dialog.result_step())
             self.save()
@@ -639,7 +726,10 @@ class MacrosPage(QWidget):
         if not macro or index < 0:
             return
         dialog = StepDialog(
-            self.context.projects.data.get("classes", []), macro["steps"][index], self
+            self.context.projects.data.get("classes", []),
+            macro["steps"][index],
+            self,
+            watch_bounds=self.current_watch_bounds(macro),
         )
         if dialog.exec():
             updated_step = dialog.result_step()
@@ -708,6 +798,56 @@ class MacrosPage(QWidget):
         macro["monitor_index"] = monitor_index
         self.save()
         self.context.config.update({"preferred_monitor": monitor_index})
+        self.refresh_runtime_options()
+
+    def draw_detection_region(self) -> None:
+        macro = self.current_macro()
+        if macro is None or self.worker is not None or self.debug_worker is not None:
+            return
+        try:
+            bounds = self.current_watch_bounds(macro)
+            existing = (
+                absolute_region_from_normalized(macro["detection_region"], bounds)
+                if macro.get("detection_region")
+                else None
+            )
+            picker = DetectionRegionPickerOverlay(bounds, existing, self)
+            app_window = self.window()
+            previous_opacity = app_window.windowOpacity()
+            try:
+                app_window.setWindowOpacity(0.01)
+                result = picker.exec()
+            finally:
+                app_window.setWindowOpacity(previous_opacity)
+                app_window.raise_()
+                app_window.activateWindow()
+            if result != QDialog.Accepted or picker.selected_region is None:
+                return
+            macro["detection_region"] = normalized_region_from_absolute(
+                picker.selected_region, bounds
+            )
+            self.save()
+            self.refresh_runtime_options()
+            self.context.log(
+                "Saved macro detection region: "
+                + detection_region_label(macro["detection_region"])
+                + "."
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Detection region unavailable",
+                f"The detection region could not be saved: {exc}",
+            )
+
+    def clear_detection_region(self) -> None:
+        macro = self.current_macro()
+        if macro is None:
+            return
+        macro.pop("detection_region", None)
+        self.save()
+        self.refresh_runtime_options()
+        self.context.log("Macro detection region reset to the full Watch source.")
 
     def overlay_toggled(self, enabled: bool) -> None:
         self.context.config.update({"macro_overlay_enabled": bool(enabled)})
@@ -779,6 +919,7 @@ class MacrosPage(QWidget):
             time_limit_seconds=time_limit_seconds,
             monitor_index=monitor_index,
             one_loop=one_loop,
+            detection_region=deepcopy(macro.get("detection_region")),
         )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
@@ -837,6 +978,7 @@ class MacrosPage(QWidget):
             len(macro["steps"]),
             path,
             int(macro.get("monitor_index", 0)),
+            deepcopy(macro.get("detection_region")),
             3.0 if step_needs_screen_preview(step) else 0.0,
         )
         self.debug_worker.moveToThread(self.debug_thread)
@@ -975,8 +1117,12 @@ class MacrosPage(QWidget):
             self.single_button,
             self.test_button,
             self.record_button,
+            self.draw_region_button,
         ):
             button.setEnabled(active)
+        self.clear_region_button.setEnabled(
+            active and bool((self.current_macro() or {}).get("detection_region"))
+        )
         self.time_limit.setEnabled(active)
         self.monitor_combo.setEnabled(active)
 

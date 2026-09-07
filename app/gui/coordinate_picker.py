@@ -4,6 +4,8 @@ from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QDialog
 
+from app.automation.coordinates import window_at_point
+
 
 class CoordinatePickerOverlay(QDialog):
     """Full-desktop overlay for safely selecting a macro screen coordinate."""
@@ -18,6 +20,7 @@ class CoordinatePickerOverlay(QDialog):
         self.mode = mode if mode in {"click", "hover"} else "click"
         self.remaining = max(1, int(countdown_seconds))
         self.selected_coordinate: tuple[int, int] | None = None
+        self.selected_window: dict | None = None
         self._finished = False
         self._mouse_controller = None
         try:
@@ -117,6 +120,7 @@ class CoordinatePickerOverlay(QDialog):
         self._timer.stop()
         position = self._cursor_position()
         self.selected_coordinate = (position.x(), position.y())
+        self.selected_window = window_at_point(position.x(), position.y())
         self.accept()
 
     def _cancel(self) -> None:

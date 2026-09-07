@@ -24,6 +24,11 @@ limit detection checks, ignore a recently clicked object for a cooldown period,
 and wait for a clicked object to disappear. Existing macros keep their previous
 behavior until these settings are enabled on a step.
 
+Regions and portable coordinates: A macro can watch a drawn portion of its
+selected monitor. Fixed mouse steps can use absolute screen coordinates,
+resolution-scaled Watch percentages, or a percentage inside a saved visible
+application window. Safe-preview portable coordinates before live use.
+
 This is an unsigned experimental build. Windows may warn about software that
 does not have an established reputation. Confirm that the ZIP came directly
 from the person you trust before opening it.

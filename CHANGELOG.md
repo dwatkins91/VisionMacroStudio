@@ -5,6 +5,17 @@ All notable changes to Vision Macro Studio are documented here.
 The project is currently in early development. Version numbers below describe
 working snapshots rather than a promise of backward compatibility.
 
+## [0.1.17] - 2026-09-07
+
+- Added a per-macro drawable detection region so inference can ignore irrelevant parts of the selected Watch source.
+- Saved detection regions as normalized percentages so they scale with monitor resolution changes.
+- Added absolute, Watch-relative, and application-window-relative coordinate modes to fixed mouse steps.
+- Added coordinate picking that records a target window title/class and a percentage position inside that window.
+- Resolved portable coordinates against the current monitor or current matching-window bounds at runtime.
+- Added region-aware safe previews, coordinate resolution markers and logs, macro JSON validation, dependency-light tests, and packaged self-test coverage.
+- Advanced exported macro JSON to format version 2 while continuing to import existing version 1 macro files.
+- Kept existing macros backward-compatible as full-source detection with absolute coordinates.
+
 ## [0.1.16] - 2026-09-07
 
 - Added per-step consecutive detection confirmations to reduce one-frame false positives.

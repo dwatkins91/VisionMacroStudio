@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.1.16</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
+  <strong>Current version: 0.1.17</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
 </p>
 
 ![Vision Macro Studio training page](docs/images/training-page.png)
@@ -41,7 +41,7 @@ The application uses:
 | Training | Nano/Small/Medium YOLO fine-tuning, CPU/GPU selection, model lineage, training from an existing model |
 | Testing | Saved-image and live-screen inference with confidence, FPS, and timing feedback |
 | Models | Versioned model library with explicit acceptance and mAP50 reporting |
-| Macros | Detection waits, stable confirmations, click cooldowns, object clicks, priority fallback, conditional branches, loops, keyboard input, coordinate actions, random timing, and offsets |
+| Macros | Detection regions, stable confirmations, click cooldowns, object clicks, priority fallback, conditional branches, loops, portable coordinates, random timing, and offsets |
 | Usability | Safe step debugger, one-loop runs, coordinate picker, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
 | Safety | F12 emergency stop, interruptible waits and mouse travel, and automatic input release |
 
@@ -100,11 +100,25 @@ Refinement creates a new candidate model rather than overwriting the earlier one
 - **Click Object** and **Right Click Object** target a configurable position inside a detected box.
 - **Go To Step** and **Repeat** support intentional loops and capped repetition.
 - **Wait** and detection timeouts support randomized minimum/maximum durations.
-- **Click**, **Double Click**, **Right Click**, and **Move Mouse** support fixed screen coordinates and optional random pixel offsets.
+- **Click**, **Double Click**, **Right Click**, and **Move Mouse** support absolute or portable relative positions and optional random pixel offsets.
 - **Press Key** and **Type Text** provide keyboard actions.
 - **Wait Until Disappears** can pause until a visual state clears.
 
-Coordinate actions include **Pick by Click** and **Pick by Hover** tools. Always verify coordinates after moving a macro to a computer with a different screen layout.
+Coordinate actions include **Pick by Click** and **Pick by Hover** tools. Always use Safe Step Preview after moving a macro to another computer.
+
+## Regions and portable coordinates
+
+Each macro can use the full selected **Watch** source or a smaller detection region. Choose **Draw Region**, drag around the useful portion of the screen, and release to save it. Detection then captures and analyzes only that area. The region is stored as percentages of the Watch source, so it follows resolution changes instead of preserving one fixed pixel rectangle. **Use Full Source** removes the crop.
+
+Fixed mouse steps provide three coordinate bases:
+
+- **Absolute screen position** preserves the existing X/Y behavior.
+- **Watch source** stores horizontal and vertical percentages and recalculates the point for the Watch source's current position and resolution.
+- **Application window** records the window underneath the picker and stores a percentage position inside it. At runtime, the coordinate follows that window when it moves or resizes.
+
+Application-window coordinates identify a visible, non-minimized window by its saved title and Windows window class. They do not activate, restore, or uncover that window. Safe-preview the red target marker with the intended application visible before allowing live input.
+
+Existing macros remain unchanged: they use the complete Watch source and absolute screen coordinates until the new options are selected.
 
 ## Detection stability
 
@@ -127,7 +141,9 @@ An importable, coordinate-free example is available at [`examples/priority-branc
 
 ## Sharing macros
 
-The Macro Builder exports versioned `.vmsmacro.json` files containing the macro steps, object names, timing, coordinates, offsets, monitor choice, and time limit. Models, screenshots, and dataset images are not included.
+The Macro Builder exports versioned `.vmsmacro.json` files containing the macro steps, object names, timing, detection region, coordinate bases, offsets, monitor choice, and time limit. Models, screenshots, and dataset images are not included.
+
+Version 0.1.17 exports macro format version 2 so older releases cannot silently treat portable coordinates as absolute ones. It continues to import existing format version 1 macros.
 
 Imported macros are validated before being added. The application warns about missing object classes, unavailable monitors, and coordinates that may need verification on a different display layout.
 
@@ -170,7 +186,7 @@ Run the dependency-light smoke test from the repository root:
 py tests\smoke_test.py
 ```
 
-The smoke test covers project persistence, labeled captures, dataset generation, class renaming, model registration and acceptance, macro detection-stability behavior and validation, and project ZIP export/import.
+The smoke test covers project persistence, labeled captures, dataset generation, class renaming, model registration and acceptance, macro stability, detection-region cropping, portable-coordinate scaling and validation, and project ZIP export/import.
 
 To check every Python module for syntax errors:
 
@@ -188,13 +204,14 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.1.16.zip`
+`release\VisionMacroStudio-Portable-v0.1.17.zip`
 
 The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. The resulting binaries are unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
 
 ## Current limitations
 
-- Live testing captures a complete monitor or the virtual desktop, not an individual window or arbitrary region.
+- Detection regions are configured per macro rather than separately for each detection step.
+- Window-relative coordinates do not bring a covered or minimized target window to the foreground.
 - The macro builder uses row controls rather than draggable visual blocks.
 - The input recorder stores clicks, key presses, and delays rather than every raw mouse movement.
 - Training charts are produced in the Ultralytics run folder instead of being graphed inside the application.

@@ -18,6 +18,13 @@ from PySide6.QtWidgets import (
 )
 
 from app.automation.control import SUPPORTED_ACTIONS, destination_steps, object_names
+from app.automation.coordinates import (
+    COORDINATE_MODE_LABELS,
+    checked_bounds,
+    coordinate_mode,
+    point_from_relative,
+    relative_point,
+)
 from app.gui.coordinate_picker import CoordinatePickerOverlay
 
 ACTIONS = list(SUPPORTED_ACTIONS)
@@ -25,12 +32,28 @@ ACTIONS = list(SUPPORTED_ACTIONS)
 
 class StepDialog(QDialog):
     def __init__(
-        self, classes: list[str], step: dict | None = None, parent=None
+        self,
+        classes: list[str],
+        step: dict | None = None,
+        parent=None,
+        watch_bounds: dict[str, int] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Macro Step")
         self.setMinimumWidth(430)
         self.step = step or {}
+        self.window_class = str(self.step.get("window_class", ""))
+        self.watch_bounds = checked_bounds(
+            watch_bounds or {"left": 0, "top": 0, "width": 1920, "height": 1080}
+        )
+        saved_window_bounds = self.step.get("window_reference_bounds")
+        try:
+            self.window_reference_bounds = (
+                checked_bounds(saved_window_bounds) if saved_window_bounds else None
+            )
+        except Exception:
+            self.window_reference_bounds = None
+        self._updating_coordinate = False
         self.coordinate_picker: CoordinatePickerOverlay | None = None
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -156,11 +179,50 @@ class StepDialog(QDialog):
         self.y = QSpinBox()
         self.y.setRange(-100000, 100000)
         self.y.setValue(int(self.step.get("y", 0)))
+        self.coordinate_basis = QComboBox()
+        for mode, label in COORDINATE_MODE_LABELS.items():
+            self.coordinate_basis.addItem(label, mode)
+        self.coordinate_basis.setToolTip(
+            "Absolute keeps one screen pixel. Watch-relative scales with the selected monitor. "
+            "Application-window-relative follows a visible window when it moves or resizes."
+        )
+        saved_mode = coordinate_mode(self.step.get("coordinate_mode", "absolute"))
+        self.coordinate_basis.setCurrentIndex(
+            max(0, self.coordinate_basis.findData(saved_mode))
+        )
+        if "relative_x" in self.step and "relative_y" in self.step:
+            initial_relative_x = float(self.step["relative_x"])
+            initial_relative_y = float(self.step["relative_y"])
+        elif saved_mode == "watch_relative":
+            initial_relative_x, initial_relative_y = relative_point(
+                self.x.value(), self.y.value(), self.watch_bounds
+            )
+        elif saved_mode == "window_relative" and self.window_reference_bounds:
+            initial_relative_x, initial_relative_y = relative_point(
+                self.x.value(), self.y.value(), self.window_reference_bounds
+            )
+        else:
+            initial_relative_x, initial_relative_y = 0.5, 0.5
+        self.relative_x = QDoubleSpinBox()
+        self.relative_x.setRange(0, 100)
+        self.relative_x.setDecimals(2)
+        self.relative_x.setSingleStep(1)
+        self.relative_x.setSuffix("%")
+        self.relative_x.setValue(initial_relative_x * 100)
+        self.relative_y = QDoubleSpinBox()
+        self.relative_y.setRange(0, 100)
+        self.relative_y.setDecimals(2)
+        self.relative_y.setSingleStep(1)
+        self.relative_y.setSuffix("%")
+        self.relative_y.setValue(initial_relative_y * 100)
+        self.window_title = QLineEdit(str(self.step.get("window_title", "")))
+        self.window_title.setPlaceholderText("Captured automatically by the picker")
+        self.window_title.setReadOnly(True)
+        self.window_title.setToolTip(
+            "Use a coordinate picker to identify the target application window."
+        )
         self.coordinate_status = QLabel()
         self.coordinate_status.setStyleSheet("color: #8fd7ff;")
-        self.x.valueChanged.connect(self.refresh_coordinate_status)
-        self.y.valueChanged.connect(self.refresh_coordinate_status)
-        self.refresh_coordinate_status()
         coordinate_tools = QWidget()
         coordinate_layout = QHBoxLayout(coordinate_tools)
         coordinate_layout.setContentsMargins(0, 0, 0, 0)
@@ -205,8 +267,12 @@ class StepDialog(QDialog):
             ("Minimum wait", self.duration),
             ("Maximum wait", self.duration_max),
             ("Mouse travel time", self.move_duration),
+            ("Coordinate basis", self.coordinate_basis),
             ("Screen X", self.x),
             ("Screen Y", self.y),
+            ("Horizontal position", self.relative_x),
+            ("Vertical position", self.relative_y),
+            ("Application window", self.window_title),
             ("Coordinate tools", coordinate_tools),
             ("Selected coordinate", self.coordinate_status),
             ("Repeat count", self.count),
@@ -221,7 +287,17 @@ class StepDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.action.currentTextChanged.connect(self.update_visibility)
+        self.coordinate_basis.currentIndexChanged.connect(
+            self.coordinate_basis_changed
+        )
+        self.x.valueChanged.connect(self.absolute_coordinate_changed)
+        self.y.valueChanged.connect(self.absolute_coordinate_changed)
+        self.relative_x.valueChanged.connect(self.relative_coordinate_changed)
+        self.relative_y.valueChanged.connect(self.relative_coordinate_changed)
+        if saved_mode in {"watch_relative", "window_relative"}:
+            self.relative_coordinate_changed()
         self.update_visibility()
+        self.refresh_coordinate_status()
 
     def update_visibility(self) -> None:
         action = self.action.currentText()
@@ -271,12 +347,18 @@ class StepDialog(QDialog):
             visible |= {"Minimum wait", "Maximum wait"}
         if action in ("MOVE_MOUSE", "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"):
             visible |= {
-                "Screen X",
-                "Screen Y",
+                "Coordinate basis",
                 "Coordinate tools",
                 "Selected coordinate",
                 "Mouse travel time",
             }
+            mode = self.coordinate_basis.currentData() or "absolute"
+            if mode == "absolute":
+                visible |= {"Screen X", "Screen Y"}
+            else:
+                visible |= {"Horizontal position", "Vertical position"}
+            if mode == "window_relative":
+                visible.add("Application window")
         if action in ("CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"):
             visible.add("Random pixel offset")
         if action in ("REPEAT", "GOTO_STEP"):
@@ -344,28 +426,43 @@ class StepDialog(QDialog):
             result["duration"] = self.duration.value()
             result["duration_max"] = self.duration_max.value()
         elif action == "MOVE_MOUSE":
-            result.update(
-                {
-                    "x": self.x.value(),
-                    "y": self.y.value(),
-                    "move_duration": self.move_duration.value(),
-                }
-            )
+            result.update(self.coordinate_result())
+            result["move_duration"] = self.move_duration.value()
         elif action in ("CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"):
-            result.update(
-                {
-                    "x": self.x.value(),
-                    "y": self.y.value(),
-                    "random_offset": self.random_offset.value(),
-                    "move_duration": self.move_duration.value(),
-                }
-            )
+            result.update(self.coordinate_result())
+            result["random_offset"] = self.random_offset.value()
+            result["move_duration"] = self.move_duration.value()
         elif action == "REPEAT":
             result.update(
                 {"count": self.count.value(), "target_step": self.target_step.value()}
             )
         elif action == "GOTO_STEP":
             result["target_step"] = self.target_step.value()
+        return result
+
+    def coordinate_result(self) -> dict:
+        mode = str(self.coordinate_basis.currentData() or "absolute")
+        result = {
+            "x": self.x.value(),
+            "y": self.y.value(),
+            "coordinate_mode": mode,
+        }
+        if mode in {"watch_relative", "window_relative"}:
+            result.update(
+                {
+                    "relative_x": self.relative_x.value() / 100,
+                    "relative_y": self.relative_y.value() / 100,
+                    "reference_bounds": dict(self.watch_bounds),
+                }
+            )
+        if mode == "window_relative":
+            result["window_title"] = self.window_title.text().strip()
+            if self.window_class:
+                result["window_class"] = self.window_class
+            if self.window_reference_bounds:
+                result["window_reference_bounds"] = dict(
+                    self.window_reference_bounds
+                )
         return result
 
     def pick_coordinate(self, mode: str) -> None:
@@ -391,6 +488,34 @@ class StepDialog(QDialog):
                 and picker.selected_coordinate is not None
             ):
                 x, y = picker.selected_coordinate
+                mode_name = str(self.coordinate_basis.currentData() or "absolute")
+                if mode_name == "window_relative":
+                    if picker.selected_window is None:
+                        QMessageBox.warning(
+                            self,
+                            "Application window not found",
+                            "The picker could not identify an application window under that point. "
+                            "Try again and select a point inside the target application's window.",
+                        )
+                        return
+                    self.window_reference_bounds = checked_bounds(
+                        picker.selected_window
+                    )
+                    self.window_title.setText(
+                        str(picker.selected_window.get("title", ""))
+                    )
+                    self.window_class = str(
+                        picker.selected_window.get("class_name", "")
+                    )
+                    relative_x, relative_y = relative_point(
+                        x, y, self.window_reference_bounds
+                    )
+                    self.set_relative_values(relative_x, relative_y)
+                elif mode_name == "watch_relative":
+                    relative_x, relative_y = relative_point(
+                        x, y, self.watch_bounds
+                    )
+                    self.set_relative_values(relative_x, relative_y)
                 self.x.setValue(x)
                 self.y.setValue(y)
                 self.refresh_coordinate_status(picked=True)
@@ -406,11 +531,85 @@ class StepDialog(QDialog):
             self.raise_()
             self.activateWindow()
 
+    def set_relative_values(self, relative_x: float, relative_y: float) -> None:
+        self._updating_coordinate = True
+        try:
+            self.relative_x.setValue(relative_x * 100)
+            self.relative_y.setValue(relative_y * 100)
+        finally:
+            self._updating_coordinate = False
+
+    def coordinate_basis_changed(self, _value=None) -> None:
+        mode = str(self.coordinate_basis.currentData() or "absolute")
+        if mode == "watch_relative":
+            relative_x, relative_y = relative_point(
+                self.x.value(), self.y.value(), self.watch_bounds
+            )
+            self.set_relative_values(relative_x, relative_y)
+        elif mode == "window_relative" and self.window_reference_bounds:
+            relative_x, relative_y = relative_point(
+                self.x.value(), self.y.value(), self.window_reference_bounds
+            )
+            self.set_relative_values(relative_x, relative_y)
+        self.update_visibility()
+        self.refresh_coordinate_status()
+
+    def absolute_coordinate_changed(self, _value=None) -> None:
+        if self._updating_coordinate:
+            return
+        mode = str(self.coordinate_basis.currentData() or "absolute")
+        if mode == "watch_relative":
+            relative_x, relative_y = relative_point(
+                self.x.value(), self.y.value(), self.watch_bounds
+            )
+            self.set_relative_values(relative_x, relative_y)
+        elif mode == "window_relative" and self.window_reference_bounds:
+            relative_x, relative_y = relative_point(
+                self.x.value(), self.y.value(), self.window_reference_bounds
+            )
+            self.set_relative_values(relative_x, relative_y)
+        self.refresh_coordinate_status()
+
+    def relative_coordinate_changed(self, _value=None) -> None:
+        if self._updating_coordinate:
+            return
+        mode = str(self.coordinate_basis.currentData() or "absolute")
+        bounds = (
+            self.watch_bounds
+            if mode == "watch_relative"
+            else self.window_reference_bounds
+        )
+        if bounds:
+            x, y = point_from_relative(
+                self.relative_x.value() / 100,
+                self.relative_y.value() / 100,
+                bounds,
+            )
+            self._updating_coordinate = True
+            try:
+                self.x.setValue(x)
+                self.y.setValue(y)
+            finally:
+                self._updating_coordinate = False
+        self.refresh_coordinate_status()
+
     def refresh_coordinate_status(self, _value=None, *, picked: bool = False) -> None:
         prefix = "Picked" if picked else "Current"
-        self.coordinate_status.setText(
-            f"{prefix}: X {self.x.value()}, Y {self.y.value()}"
-        )
+        mode = str(self.coordinate_basis.currentData() or "absolute")
+        if mode == "absolute":
+            detail = f"screen X {self.x.value()}, Y {self.y.value()}"
+        elif mode == "watch_relative":
+            detail = (
+                f"Watch {self.relative_x.value():g}%, {self.relative_y.value():g}% "
+                f"→ X {self.x.value()}, Y {self.y.value()} at the current resolution"
+            )
+        else:
+            title = self.window_title.text().strip() or "choose a window with the picker"
+            detail = (
+                f"{title} · {self.relative_x.value():g}%, "
+                f"{self.relative_y.value():g}%"
+            )
+        self.coordinate_status.setText(f"{prefix}: {detail}")
 
     def accept(self) -> None:
         action = self.action.currentText()
@@ -437,6 +636,18 @@ class StepDialog(QDialog):
                 self,
                 "Invalid wait range",
                 "Maximum wait must be equal to or greater than minimum wait.",
+            )
+            return
+        if (
+            action in ("MOVE_MOUSE", "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK")
+            and self.coordinate_basis.currentData() == "window_relative"
+            and not self.window_title.text().strip()
+        ):
+            QMessageBox.warning(
+                self,
+                "Choose an application window",
+                "Use Pick by Click or Pick by Hover while Application window is selected. "
+                "The picker records both the window and the relative position.",
             )
             return
         if action in ("WAIT_FOR_ANY_OBJECT", "CLICK_FIRST_AVAILABLE"):

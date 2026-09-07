@@ -111,7 +111,37 @@ def analyze_step(
 
     if step_needs_detection(step):
         confidence = float(step.get("confidence", 0.70))
+        required = max(1, int(step.get("required_consecutive_detections", 1)))
+        max_attempts = max(0, int(step.get("max_detection_attempts", 0)))
         details.append(f"Required confidence: {confidence:.0%}.")
+        if required > 1:
+            details.append(
+                f"The live step requires {required} consecutive matching screen checks."
+            )
+        if max_attempts > 0:
+            details.append(
+                f"The live step allows at most {max_attempts} detection checks."
+            )
+        cooldown = max(0.0, float(step.get("click_cooldown_seconds", 0)))
+        if cooldown > 0:
+            details.append(
+                f"After a live click, the same object near that position is ignored for {cooldown:g} second(s)."
+            )
+            details.append(
+                "Safe preview has no prior-click history, so it cannot apply that cooldown."
+            )
+        if step.get("wait_after_click_until_disappears", False):
+            disappear_timeout = max(
+                0.0, float(step.get("post_click_disappear_timeout", 10))
+            )
+            disappear_text = (
+                "forever"
+                if disappear_timeout == 0
+                else f"up to {disappear_timeout:g} second(s)"
+            )
+            details.append(
+                f"After a live click, the step waits {disappear_text} for the clicked object to disappear."
+            )
         details.append(_visible_description(detections))
         details.append(_timeout_description(step))
 
@@ -214,6 +244,12 @@ def analyze_step(
                     f"({marker[0]}, {marker[1]})"
                     f"{' with a ±' + str(offset) + ' px offset' if offset else ''}."
                 )
+
+        if required > 1 and decision.startswith(("PASS —", "MATCH —", "READY —")):
+            decision = (
+                f"FRAME MATCH 1 OF {required} — {decision.split(' — ', 1)[1]} "
+                f"A live run waits for {required} consecutive confirmations."
+            )
     elif action == "WAIT":
         minimum = float(step.get("duration", 1.0))
         maximum = float(step.get("duration_max", minimum))

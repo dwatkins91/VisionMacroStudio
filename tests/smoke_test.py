@@ -5,7 +5,9 @@ Run from the project root with: python tests/smoke_test.py
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import importlib.util
 import sys
+from types import ModuleType
 
 from PIL import Image
 
@@ -37,7 +39,98 @@ from app.vision.model_manager import (  # noqa: E402
 from app.vision.detector import Detector, class_name_key, to_ultralytics_source  # noqa: E402
 
 
+def exercise_stability_engine() -> None:
+    """Exercise stability state without requiring GUI/capture packages in CI."""
+
+    if importlib.util.find_spec("PySide6") is None:
+        pyside = ModuleType("PySide6")
+        qtcore = ModuleType("PySide6.QtCore")
+
+        class TestSignal:
+            def __init__(self, *args) -> None:
+                self.values = []
+
+            def emit(self, *args) -> None:
+                self.values.append(args)
+
+        class TestQObject:
+            pass
+
+        def test_slot(*args, **kwargs):
+            return lambda function: function
+
+        qtcore.QObject = TestQObject
+        qtcore.Signal = TestSignal
+        qtcore.Slot = test_slot
+        pyside.QtCore = qtcore
+        sys.modules["PySide6"] = pyside
+        sys.modules["PySide6.QtCore"] = qtcore
+    if importlib.util.find_spec("mss") is None:
+        mss_module = ModuleType("mss")
+        mss_module.mss = lambda: None
+        sys.modules["mss"] = mss_module
+
+    from app.automation.engine import MacroWorker
+
+    detection = {
+        "class_name": "Target",
+        "confidence": 0.91,
+        "bbox": [100, 100, 40, 40],
+    }
+    worker = MacroWorker({"name": "Stability Test", "steps": []}, None)
+    worker._interruptible_sleep = lambda _seconds: False
+    sequence = iter([detection, None, detection, detection])
+
+    def fake_detect(*_args, **_kwargs):
+        return next(sequence), (0, 0), 0
+
+    worker._detect = fake_detect
+    found, _origin = worker._wait_for(
+        None,
+        {
+            "object": "Target",
+            "timeout": 0,
+            "required_consecutive_detections": 2,
+            "max_detection_attempts": 10,
+        },
+        True,
+    )
+    assert found is detection
+
+    worker = MacroWorker({"name": "Attempt Test", "steps": []}, None)
+    worker._interruptible_sleep = lambda _seconds: False
+    checks = {"count": 0}
+
+    def never_detect(*_args, **_kwargs):
+        checks["count"] += 1
+        return None, (0, 0), 0
+
+    worker._detect = never_detect
+    found, _origin = worker._wait_for(
+        None,
+        {
+            "object": "Target",
+            "timeout": 0,
+            "required_consecutive_detections": 1,
+            "max_detection_attempts": 3,
+            "on_timeout": "continue",
+        },
+        True,
+    )
+    assert found is None and checks["count"] == 3
+
+    worker = MacroWorker({"name": "Cooldown Test", "steps": []}, None)
+    worker._remember_detection_click(detection, (0, 0), "Target", 5)
+    nearby = dict(detection)
+    far_away = dict(detection, bbox=[500, 500, 40, 40])
+    allowed, ignored = worker._filter_recent_detection_clicks(
+        [nearby, far_away], (0, 0), True
+    )
+    assert ignored == 1 and allowed == [far_away]
+
+
 def main() -> None:
+    exercise_stability_engine()
     assert object_names("Primary, Fallback") == ["Primary", "Fallback"]
     assert object_names([" Message_A ", "Message_B"]) == [
         "Message_A",
@@ -86,11 +179,15 @@ def main() -> None:
         "target_steps": [2, 4],
         "confidence": 0.70,
         "timeout": 10,
+        "required_consecutive_detections": 3,
+        "max_detection_attempts": 40,
     }
     branch_report = analyze_step(branch_step, 0, 4, branch_detections)
     assert step_needs_detection(branch_step)
     assert "Remains_Sprite" in branch_report["decision"]
     assert "step 2" in branch_report["decision"]
+    assert branch_report["decision"].startswith("FRAME MATCH 1 OF 3")
+    assert any("at most 40" in detail for detail in branch_report["details"])
     low_report = analyze_step(
         {"action": "WAIT_FOR_OBJECT", "object": "Time_Sprite", "confidence": 0.9},
         2,
@@ -138,6 +235,11 @@ def main() -> None:
                         "action": "CLICK_FIRST_AVAILABLE",
                         "objects": ["Start_Button", "Target"],
                         "confidence": 0.3,
+                        "required_consecutive_detections": 2,
+                        "max_detection_attempts": 25,
+                        "click_cooldown_seconds": 4,
+                        "wait_after_click_until_disappears": True,
+                        "post_click_disappear_timeout": 6,
                     },
                     {
                         "enabled": True,
@@ -169,6 +271,11 @@ def main() -> None:
         saved_macro = reopened.data["macros"][0]
         assert saved_macro["time_limit_minutes"] == 12.5
         assert saved_macro["steps"][0]["objects"] == ["Start_Button", "Target"]
+        assert saved_macro["steps"][0]["required_consecutive_detections"] == 2
+        assert saved_macro["steps"][0]["max_detection_attempts"] == 25
+        assert saved_macro["steps"][0]["click_cooldown_seconds"] == 4
+        assert saved_macro["steps"][0]["wait_after_click_until_disappears"] is True
+        assert saved_macro["steps"][0]["post_click_disappear_timeout"] == 6
         assert saved_macro["steps"][1]["target_steps"] == [0, 1]
         assert saved_macro["steps"][2]["target_step"] == 1
         assert saved_macro["steps"][3]["action"] == "RIGHT_CLICK_OBJECT"
@@ -208,6 +315,18 @@ def main() -> None:
             pass
         else:
             raise AssertionError("Unsupported imported actions should be rejected")
+        invalid_stability_macro = root / "invalid_stability_macro.json"
+        invalid_stability_macro.write_text(
+            '{"name":"Invalid Stability","steps":[{"action":"WAIT_FOR_OBJECT",'
+            '"object":"Target","required_consecutive_detections":0}]}',
+            encoding="utf-8",
+        )
+        try:
+            import_macro_file(invalid_stability_macro)
+        except MacroFormatError:
+            pass
+        else:
+            raise AssertionError("Invalid stability limits should be rejected")
         dummy_model = project.path("models/Smoke_Model_v1.pt")
         dummy_model.write_bytes(b"test model placeholder")
         first_model = register_model(

@@ -10,3 +10,7 @@ edit the imported steps to use the classes from your own model.
 Use **Safe Step Preview** first to verify detection thresholds and branching
 without sending input. **Run Selected Step** is a live test and can send the
 configured mouse or keyboard action.
+
+The priority-branch example also demonstrates consecutive confirmations, a
+maximum detection-check count, a clicked-object cooldown, and a post-click
+wait for the selected object to disappear.

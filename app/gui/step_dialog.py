@@ -79,6 +79,23 @@ class StepDialog(QDialog):
         self.on_timeout = QComboBox()
         self.on_timeout.addItems(["stop", "continue"])
         self.on_timeout.setCurrentText(self.step.get("on_timeout", "stop"))
+        self.required_detections = QSpinBox()
+        self.required_detections.setRange(1, 20)
+        self.required_detections.setValue(
+            int(self.step.get("required_consecutive_detections", 1))
+        )
+        self.required_detections.setToolTip(
+            "Require the same condition in this many consecutive screen checks before the step passes."
+        )
+        self.max_detection_attempts = QSpinBox()
+        self.max_detection_attempts.setRange(0, 100000)
+        self.max_detection_attempts.setSpecialValueText("No limit")
+        self.max_detection_attempts.setValue(
+            int(self.step.get("max_detection_attempts", 0))
+        )
+        self.max_detection_attempts.setToolTip(
+            "Stop or continue according to If timeout after this many checks. Zero leaves only the step's time-based timeout."
+        )
         self.target_x = QSpinBox()
         self.target_x.setRange(0, 100)
         self.target_x.setSuffix("%")
@@ -91,6 +108,33 @@ class StepDialog(QDialog):
         self.random_offset.setRange(0, 100)
         self.random_offset.setSuffix(" px")
         self.random_offset.setValue(int(self.step.get("random_offset", 0)))
+        self.click_cooldown = QDoubleSpinBox()
+        self.click_cooldown.setRange(0, 3600)
+        self.click_cooldown.setSingleStep(0.5)
+        self.click_cooldown.setSuffix(" sec")
+        self.click_cooldown.setSpecialValueText("No cooldown")
+        self.click_cooldown.setValue(
+            float(self.step.get("click_cooldown_seconds", 0))
+        )
+        self.click_cooldown.setToolTip(
+            "Temporarily ignore the same detected class near the same screen position after clicking it."
+        )
+        self.wait_after_click = QCheckBox("Wait until the clicked object disappears")
+        self.wait_after_click.setChecked(
+            bool(self.step.get("wait_after_click_until_disappears", False))
+        )
+        self.post_click_timeout = QDoubleSpinBox()
+        self.post_click_timeout.setRange(0, 3600)
+        self.post_click_timeout.setSuffix(" sec")
+        self.post_click_timeout.setSpecialValueText("Forever")
+        self.post_click_timeout.setValue(
+            float(self.step.get("post_click_disappear_timeout", 10))
+        )
+        self.post_click_timeout.setToolTip(
+            "How long to wait for the clicked object to disappear. If timeout controls what happens next."
+        )
+        self.post_click_timeout.setEnabled(self.wait_after_click.isChecked())
+        self.wait_after_click.toggled.connect(self.post_click_timeout.setEnabled)
         self.duration = QDoubleSpinBox()
         self.duration.setRange(0, 3600)
         self.duration.setSuffix(" sec")
@@ -149,10 +193,15 @@ class StepDialog(QDialog):
             ("Minimum timeout", self.timeout),
             ("Maximum timeout (both 0 = forever)", self.timeout_max),
             ("Polling interval", self.poll),
+            ("Consecutive confirmations", self.required_detections),
+            ("Maximum detection checks", self.max_detection_attempts),
             ("If timeout", self.on_timeout),
             ("Click X inside box", self.target_x),
             ("Click Y inside box", self.target_y),
             ("Random pixel offset", self.random_offset),
+            ("Clicked-object cooldown", self.click_cooldown),
+            ("After clicking", self.wait_after_click),
+            ("Disappear wait timeout", self.post_click_timeout),
             ("Minimum wait", self.duration),
             ("Maximum wait", self.duration_max),
             ("Mouse travel time", self.move_duration),
@@ -189,6 +238,8 @@ class StepDialog(QDialog):
                 "Minimum timeout",
                 "Maximum timeout (both 0 = forever)",
                 "Polling interval",
+                "Consecutive confirmations",
+                "Maximum detection checks",
                 "If timeout",
             }
         if action in ("WAIT_FOR_ANY_OBJECT", "CLICK_FIRST_AVAILABLE"):
@@ -198,6 +249,8 @@ class StepDialog(QDialog):
                 "Minimum timeout",
                 "Maximum timeout (both 0 = forever)",
                 "Polling interval",
+                "Consecutive confirmations",
+                "Maximum detection checks",
                 "If timeout",
             }
         if action == "WAIT_FOR_ANY_OBJECT":
@@ -208,6 +261,9 @@ class StepDialog(QDialog):
                 "Click Y inside box",
                 "Random pixel offset",
                 "Mouse travel time",
+                "Clicked-object cooldown",
+                "After clicking",
+                "Disappear wait timeout",
             }
         if action in ("PRESS_KEY", "TYPE_TEXT"):
             visible.add("Key / text")
@@ -250,6 +306,8 @@ class StepDialog(QDialog):
                     "timeout": self.timeout.value(),
                     "timeout_max": self.timeout_max.value(),
                     "poll_interval": self.poll.value(),
+                    "required_consecutive_detections": self.required_detections.value(),
+                    "max_detection_attempts": self.max_detection_attempts.value(),
                     "on_timeout": self.on_timeout.currentText(),
                 }
             )
@@ -261,6 +319,8 @@ class StepDialog(QDialog):
                     "timeout": self.timeout.value(),
                     "timeout_max": self.timeout_max.value(),
                     "poll_interval": self.poll.value(),
+                    "required_consecutive_detections": self.required_detections.value(),
+                    "max_detection_attempts": self.max_detection_attempts.value(),
                     "on_timeout": self.on_timeout.currentText(),
                 }
             )
@@ -273,6 +333,9 @@ class StepDialog(QDialog):
                     "target_y": self.target_y.value() / 100,
                     "random_offset": self.random_offset.value(),
                     "move_duration": self.move_duration.value(),
+                    "click_cooldown_seconds": self.click_cooldown.value(),
+                    "wait_after_click_until_disappears": self.wait_after_click.isChecked(),
+                    "post_click_disappear_timeout": self.post_click_timeout.value(),
                 }
             )
         elif action in ("PRESS_KEY", "TYPE_TEXT"):

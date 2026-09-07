@@ -5,6 +5,15 @@ All notable changes to Vision Macro Studio are documented here.
 The project is currently in early development. Version numbers below describe
 working snapshots rather than a promise of backward compatibility.
 
+## [0.1.16] - 2026-09-07
+
+- Added per-step consecutive detection confirmations to reduce one-frame false positives.
+- Added optional maximum detection-check limits in addition to time-based detection timeouts.
+- Added clicked-object cooldowns that temporarily ignore the same class near the same screen position.
+- Added an optional post-click wait for a detected object to disappear before continuing.
+- Added stability settings to the Macro Builder summary, safe preview, logs, macro import/export validation, and smoke tests.
+- Kept existing macros backward-compatible with stability features disabled by default.
+
 ## [0.1.15] - 2026-09-07
 
 - Added a safe, single-frame preview for any selected macro step.

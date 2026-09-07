@@ -15,7 +15,7 @@ from app.automation.control import (
     randomized_seconds,
 )
 from app.capture.grabber import grab_screen
-from app.vision.detector import Detector
+from app.vision.detector import Detector, class_name_key
 
 
 DETECTION_ACTIONS = {
@@ -70,6 +70,7 @@ class MacroWorker(QObject):
         self._held_keys: set[Any] = set()
         self._mouse = None
         self._keyboard = None
+        self._recent_detection_clicks: list[dict[str, Any]] = []
 
     def _decision(self, message: str) -> None:
         self.log.emit(message)
@@ -121,13 +122,90 @@ class MacroWorker(QObject):
         self._check_time_limit()
         return self.stop_event.is_set()
 
+    def _filter_recent_detection_clicks(
+        self,
+        detections: list[dict[str, Any]],
+        origin: tuple[int, int],
+        respect_click_cooldown: bool = True,
+    ) -> tuple[list[dict[str, Any]], int]:
+        now = time.monotonic()
+        self._recent_detection_clicks = [
+            record
+            for record in self._recent_detection_clicks
+            if float(record["expires_at"]) > now
+        ]
+        if not respect_click_cooldown:
+            return detections, 0
+        allowed: list[dict[str, Any]] = []
+        ignored = 0
+        for detection in detections:
+            x, y, width, height = detection["bbox"]
+            center_x = origin[0] + x + width / 2
+            center_y = origin[1] + y + height / 2
+            radius = max(32.0, math.hypot(width, height) * 0.55)
+            key = class_name_key(str(detection.get("class_name", "")))
+            is_recent = any(
+                record["class_key"] == key
+                and math.hypot(
+                    center_x - float(record["center_x"]),
+                    center_y - float(record["center_y"]),
+                )
+                <= max(radius, float(record["radius"]))
+                for record in self._recent_detection_clicks
+            )
+            if is_recent:
+                ignored += 1
+            else:
+                allowed.append(detection)
+        return allowed, ignored
+
+    def _remember_detection_click(
+        self,
+        found: dict[str, Any],
+        origin: tuple[int, int],
+        object_name: str,
+        cooldown_seconds: float,
+    ) -> None:
+        cooldown = max(0.0, float(cooldown_seconds))
+        if cooldown == 0:
+            return
+        x, y, width, height = found["bbox"]
+        self._recent_detection_clicks.append(
+            {
+                "class_key": class_name_key(object_name),
+                "center_x": origin[0] + x + width / 2,
+                "center_y": origin[1] + y + height / 2,
+                "radius": max(32.0, math.hypot(width, height) * 0.55),
+                "expires_at": time.monotonic() + cooldown,
+            }
+        )
+        self._decision(
+            f"STABILITY — {object_name} at this position will be ignored for "
+            f"{cooldown:g} second(s)."
+        )
+
+    def _wait_limit_reached(self, step: dict, message: str) -> bool:
+        behavior = step.get("on_timeout", "stop")
+        if behavior == "continue":
+            self._decision(message + " Timeout behavior is Continue.")
+            return True
+        raise TimeoutError(message)
+
     def _detect(
-        self, detector: Detector, object_name: str, confidence: float
-    ) -> tuple[dict | None, tuple[int, int]]:
+        self,
+        detector: Detector,
+        object_name: str,
+        confidence: float,
+        respect_click_cooldown: bool = True,
+    ) -> tuple[dict | None, tuple[int, int], int]:
         grab = grab_screen(self.monitor_index)
         detections = detector.predict(grab.image, min(confidence, 0.05))
         if self._check_time_limit():
-            return None, (grab.left, grab.top)
+            return None, (grab.left, grab.top), 0
+        origin = (grab.left, grab.top)
+        detections, ignored = self._filter_recent_detection_clicks(
+            detections, origin, respect_click_cooldown
+        )
         candidate = detector.best(detections, object_name)
         found = detector.best(detections, object_name, confidence)
         score = found["confidence"] if found else 0.0
@@ -152,20 +230,28 @@ class MacroWorker(QObject):
             )
         else:
             self.detection_state.emit(object_name, False, 0.0)
-        return found, (grab.left, grab.top)
+        return found, origin, ignored
 
     def _detect_any(
-        self, detector: Detector, names: list[str], confidence: float
-    ) -> tuple[str | None, dict | None, tuple[int, int]]:
+        self,
+        detector: Detector,
+        names: list[str],
+        confidence: float,
+        respect_click_cooldown: bool = True,
+    ) -> tuple[str | None, dict | None, tuple[int, int], int]:
         grab = grab_screen(self.monitor_index)
         detections = detector.predict(grab.image, min(confidence, 0.05))
         if self._check_time_limit():
-            return None, None, (grab.left, grab.top)
+            return None, None, (grab.left, grab.top), 0
+        origin = (grab.left, grab.top)
+        detections, ignored = self._filter_recent_detection_clicks(
+            detections, origin, respect_click_cooldown
+        )
         for name in names:
             found = detector.best(detections, name, confidence)
             if found is not None:
                 self.detection_state.emit(name, True, found["confidence"])
-                return name, found, (grab.left, grab.top)
+                return name, found, origin, ignored
         target_candidates = [
             (name, candidate)
             for name in names
@@ -194,7 +280,7 @@ class MacroWorker(QObject):
             )
         else:
             self.detection_state.emit(targets, False, 0.0)
-        return None, None, (grab.left, grab.top)
+        return None, None, origin, ignored
 
     @staticmethod
     def _detection_description(object_name: str, found: dict) -> str:
@@ -215,27 +301,58 @@ class MacroWorker(QObject):
         if timeout > 0 and timeout_max != timeout_min:
             self.log.emit(f"Random timeout selected: {timeout:.2f} seconds.")
         poll = max(0.05, float(step.get("poll_interval", 0.25)))
+        required = max(1, int(step.get("required_consecutive_detections", 1)))
+        max_attempts = max(0, int(step.get("max_detection_attempts", 0)))
         started = time.monotonic()
+        attempts = 0
+        streak = 0
+        cooldown_reported = False
         while not self._check_time_limit():
-            found, origin = self._detect(detector, object_name, confidence)
+            found, origin, ignored = self._detect(
+                detector,
+                object_name,
+                confidence,
+                respect_click_cooldown=desired,
+            )
+            attempts += 1
             if self.stop_event.is_set():
                 return None, origin
             if (found is not None) == desired:
-                if found is not None:
-                    detail = self._detection_description(object_name, found)
-                    self.log.emit(detail)
-                    self.decision_state.emit(detail + " Step condition passed.")
-                else:
-                    detail = f"{object_name} is no longer visible."
+                streak += 1
+                if required > 1 and streak < required:
+                    state = "visible" if desired else "absent"
+                    self.decision_state.emit(
+                        f"STABILITY — {object_name} is {state}: confirmation "
+                        f"{streak} of {required}."
+                    )
+                if streak >= required:
+                    if found is not None:
+                        detail = self._detection_description(object_name, found)
+                    else:
+                        detail = f"{object_name} is no longer visible."
+                    if required > 1:
+                        detail += f" Confirmed across {required} consecutive checks."
                     self._decision(detail + " Step condition passed.")
-                return found, origin
-            if timeout > 0 and time.monotonic() - started >= timeout:
-                behavior = step.get("on_timeout", "stop")
-                message = f"Timed out waiting for {object_name}."
-                if behavior == "continue":
-                    self._decision(message + " Timeout behavior is Continue.")
+                    return found, origin
+            else:
+                streak = 0
+            if ignored and not cooldown_reported:
+                cooldown_reported = True
+                self._decision(
+                    f"STABILITY — Ignored {ignored} recent {object_name} detection(s) "
+                    "because the clicked-object cooldown is active."
+                )
+            if max_attempts and attempts >= max_attempts:
+                message = (
+                    f"Reached the maximum of {max_attempts} detection checks while "
+                    f"waiting for {object_name}."
+                )
+                if self._wait_limit_reached(step, message):
                     return None, origin
-                raise TimeoutError(message)
+            if timeout > 0 and time.monotonic() - started >= timeout:
+                message = f"Timed out waiting for {object_name}."
+                if self._wait_limit_reached(step, message):
+                    return None, origin
             self._interruptible_sleep(poll)
         return None, (0, 0)
 
@@ -252,21 +369,58 @@ class MacroWorker(QObject):
         if timeout > 0 and timeout_max != timeout_min:
             self.log.emit(f"Random timeout selected: {timeout:.2f} seconds.")
         poll = max(0.05, float(step.get("poll_interval", 0.25)))
+        required = max(1, int(step.get("required_consecutive_detections", 1)))
+        max_attempts = max(0, int(step.get("max_detection_attempts", 0)))
         started = time.monotonic()
         origin = (0, 0)
+        attempts = 0
+        streak = 0
+        streak_name: str | None = None
+        cooldown_reported = False
         while not self._check_time_limit():
-            matched, found, origin = self._detect_any(detector, names, confidence)
+            matched, found, origin, ignored = self._detect_any(
+                detector, names, confidence, respect_click_cooldown=True
+            )
+            attempts += 1
             if self.stop_event.is_set():
                 return None, None, origin
-            if found is not None:
-                return matched, found, origin
-            if timeout > 0 and time.monotonic() - started >= timeout:
-                behavior = step.get("on_timeout", "stop")
-                message = f"Timed out waiting for any of: {', '.join(names)}."
-                if behavior == "continue":
-                    self._decision(message + " Timeout behavior is Continue.")
+            if found is not None and matched is not None:
+                if matched == streak_name:
+                    streak += 1
+                else:
+                    streak_name = matched
+                    streak = 1
+                if required > 1 and streak < required:
+                    self.decision_state.emit(
+                        f"STABILITY — {matched} confirmation {streak} of {required}."
+                    )
+                if streak >= required:
+                    if required > 1:
+                        self._decision(
+                            f"STABILITY — {matched} confirmed across "
+                            f"{required} consecutive checks."
+                        )
+                    return matched, found, origin
+            else:
+                streak = 0
+                streak_name = None
+            if ignored and not cooldown_reported:
+                cooldown_reported = True
+                self._decision(
+                    f"STABILITY — Ignored {ignored} recently clicked detection(s) "
+                    "because the clicked-object cooldown is active."
+                )
+            if max_attempts and attempts >= max_attempts:
+                message = (
+                    f"Reached the maximum of {max_attempts} detection checks while "
+                    f"waiting for any of: {', '.join(names)}."
+                )
+                if self._wait_limit_reached(step, message):
                     return None, None, origin
-                raise TimeoutError(message)
+            if timeout > 0 and time.monotonic() - started >= timeout:
+                message = f"Timed out waiting for any of: {', '.join(names)}."
+                if self._wait_limit_reached(step, message):
+                    return None, None, origin
             self._interruptible_sleep(poll)
         return None, None, origin
 
@@ -320,6 +474,35 @@ class MacroWorker(QObject):
         self._decision(
             f"ACTION — {verb} {object_name} at ({round(target_x)}, {round(target_y)})."
         )
+        self._remember_detection_click(
+            found,
+            origin,
+            object_name,
+            float(step.get("click_cooldown_seconds", 0)),
+        )
+
+    def _wait_after_detection_click(
+        self, detector: Detector, step: dict[str, Any], object_name: str
+    ) -> None:
+        if not step.get("wait_after_click_until_disappears", False):
+            return
+        timeout = max(0.0, float(step.get("post_click_disappear_timeout", 10)))
+        wait_step = dict(step)
+        wait_step.update(
+            {
+                "object": object_name,
+                "timeout": timeout,
+                "timeout_max": timeout,
+                "max_detection_attempts": 0,
+                "click_cooldown_seconds": 0,
+            }
+        )
+        timeout_text = "forever" if timeout == 0 else f"up to {timeout:g} second(s)"
+        self._decision(
+            f"STABILITY — Waiting {timeout_text} for {object_name} to disappear "
+            "before the macro continues."
+        )
+        self._wait_for(detector, wait_step, False)
 
     def _execute_step(self, detector: Detector | None, step: dict[str, Any]) -> None:
         from pynput.mouse import Button
@@ -340,6 +523,9 @@ class MacroWorker(QObject):
                 str(step.get("object", "")),
                 right_click=action == "RIGHT_CLICK_OBJECT",
             )
+            self._wait_after_detection_click(
+                detector, step, str(step.get("object", ""))
+            )
         elif action == "CLICK_FIRST_AVAILABLE":
             names = object_names(step.get("objects", []))
             matched, found, origin = self._wait_for_any(detector, step)
@@ -358,6 +544,7 @@ class MacroWorker(QObject):
                     f"at {found['confidence']:.0%} confidence."
                 )
             self._click_detection(found, origin, step, matched)
+            self._wait_after_detection_click(detector, step, matched)
         elif action == "PRESS_KEY":
             key = _keyboard_key(str(step.get("value", "space")))
             self._keyboard.press(key)

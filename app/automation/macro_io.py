@@ -17,6 +17,19 @@ MACRO_FILE_FORMAT = "vision-macro-studio/macro"
 MACRO_FILE_VERSION = 1
 MAX_MACRO_FILE_BYTES = 5 * 1024 * 1024
 COORDINATE_ACTIONS = {"MOVE_MOUSE", "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK"}
+DETECTION_ACTIONS = {
+    "WAIT_FOR_OBJECT",
+    "WAIT_FOR_ANY_OBJECT",
+    "WAIT_UNTIL_DISAPPEARS",
+    "CLICK_OBJECT",
+    "RIGHT_CLICK_OBJECT",
+    "CLICK_FIRST_AVAILABLE",
+}
+DETECTION_CLICK_ACTIONS = {
+    "CLICK_OBJECT",
+    "RIGHT_CLICK_OBJECT",
+    "CLICK_FIRST_AVAILABLE",
+}
 
 
 class MacroFormatError(ValueError):
@@ -92,6 +105,47 @@ def validate_macro(macro: Any) -> dict[str, Any]:
                     raise MacroFormatError(
                         f"Step {index} does not have a valid screen {axis.upper()} coordinate."
                     ) from exc
+        if action in DETECTION_ACTIONS:
+            try:
+                required = int(step.get("required_consecutive_detections", 1))
+                maximum = int(step.get("max_detection_attempts", 0))
+            except (TypeError, ValueError) as exc:
+                raise MacroFormatError(
+                    f"Step {index} has invalid detection-stability limits."
+                ) from exc
+            if not 1 <= required <= 20:
+                raise MacroFormatError(
+                    f"Step {index} consecutive confirmations must be from 1 to 20."
+                )
+            if not 0 <= maximum <= 100_000:
+                raise MacroFormatError(
+                    f"Step {index} maximum detection checks must be from 0 to 100000."
+                )
+        if action in DETECTION_CLICK_ACTIONS:
+            try:
+                cooldown = float(step.get("click_cooldown_seconds", 0))
+                disappear_timeout = float(
+                    step.get("post_click_disappear_timeout", 10)
+                )
+            except (TypeError, ValueError) as exc:
+                raise MacroFormatError(
+                    f"Step {index} has invalid clicked-object stability values."
+                ) from exc
+            if not 0 <= cooldown <= 3600:
+                raise MacroFormatError(
+                    f"Step {index} clicked-object cooldown must be from 0 to 3600 seconds."
+                )
+            if not 0 <= disappear_timeout <= 3600:
+                raise MacroFormatError(
+                    f"Step {index} disappear wait timeout must be from 0 to 3600 seconds."
+                )
+            wait_after_click = step.get(
+                "wait_after_click_until_disappears", False
+            )
+            if not isinstance(wait_after_click, bool):
+                raise MacroFormatError(
+                    f"Step {index} wait-after-click setting must be true or false."
+                )
     result = deepcopy(macro)
     result["name"] = name.strip()
     return result

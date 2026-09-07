@@ -387,12 +387,34 @@ class MacrosPage(QWidget):
                 return f"{minimum:g}s"
             return f"{minimum:g}–{maximum:g}s"
 
+        def stability_suffix() -> str:
+            settings: list[str] = []
+            required = max(
+                1, int(step.get("required_consecutive_detections", 1))
+            )
+            maximum = max(0, int(step.get("max_detection_attempts", 0)))
+            cooldown = max(0.0, float(step.get("click_cooldown_seconds", 0)))
+            if required > 1:
+                settings.append(f"confirm ×{required}")
+            if maximum > 0:
+                settings.append(f"max {maximum} checks")
+            if cooldown > 0:
+                settings.append(f"cooldown {cooldown:g}s")
+            if step.get("wait_after_click_until_disappears", False):
+                timeout = max(
+                    0.0, float(step.get("post_click_disappear_timeout", 10))
+                )
+                timeout_text = "forever" if timeout == 0 else f"{timeout:g}s"
+                settings.append(f"wait clear {timeout_text}")
+            return "" if not settings else " · " + " · ".join(settings)
+
         action = step.get("action")
         if action == "CLICK_FIRST_AVAILABLE":
             names = object_names(step.get("objects", []))
             return (
                 f"{' → '.join(names)} · ≥{float(step.get('confidence', 0.7)):.0%}"
                 f" · timeout {seconds_range('timeout', 'timeout_max', 30)}"
+                f"{stability_suffix()}"
             )
         if action == "WAIT_FOR_ANY_OBJECT":
             names = object_names(step.get("objects", []))
@@ -404,11 +426,13 @@ class MacrosPage(QWidget):
             return (
                 f"{', '.join(routes)} · ≥{float(step.get('confidence', 0.7)):.0%}"
                 f" · timeout {seconds_range('timeout', 'timeout_max', 30)}"
+                f"{stability_suffix()}"
             )
         if "OBJECT" in str(action) or "DISAPPEARS" in str(action):
             return (
                 f"{step.get('object')} · ≥{float(step.get('confidence', 0.7)):.0%}"
                 f" · timeout {seconds_range('timeout', 'timeout_max', 30)}"
+                f"{stability_suffix()}"
             )
         if action in ("PRESS_KEY", "TYPE_TEXT"):
             return str(step.get("value", ""))

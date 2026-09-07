@@ -1,7 +1,7 @@
 {
   "format": "vision-macro-studio/macro",
   "format_version": 1,
-  "app_version": "0.1.15",
+  "app_version": "0.1.16",
   "exported_at": "2026-09-07T00:00:00+00:00",
   "screen_layout": [],
   "macro": {
@@ -20,11 +20,16 @@
         "timeout": 10.0,
         "timeout_max": 10.0,
         "poll_interval": 0.25,
+        "required_consecutive_detections": 2,
+        "max_detection_attempts": 40,
         "on_timeout": "continue",
         "target_x": 0.5,
         "target_y": 0.5,
         "random_offset": 3,
-        "move_duration": 0.35
+        "move_duration": 0.35,
+        "click_cooldown_seconds": 4.0,
+        "wait_after_click_until_disappears": true,
+        "post_click_disappear_timeout": 10.0
       },
       {
         "enabled": true,
@@ -37,6 +42,8 @@
         "timeout": 30.0,
         "timeout_max": 45.0,
         "poll_interval": 0.25,
+        "required_consecutive_detections": 2,
+        "max_detection_attempts": 0,
         "on_timeout": "continue",
         "target_steps": [
           3,

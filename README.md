@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Current version: 0.1.15</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
+  <strong>Current version: 0.1.16</strong> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a>
 </p>
 
 ![Vision Macro Studio training page](docs/images/training-page.png)
@@ -41,7 +41,7 @@ The application uses:
 | Training | Nano/Small/Medium YOLO fine-tuning, CPU/GPU selection, model lineage, training from an existing model |
 | Testing | Saved-image and live-screen inference with confidence, FPS, and timing feedback |
 | Models | Versioned model library with explicit acceptance and mAP50 reporting |
-| Macros | Detection waits, object clicks, priority fallback, conditional branches, loops, keyboard input, coordinate actions, random timing, and offsets |
+| Macros | Detection waits, stable confirmations, click cooldowns, object clicks, priority fallback, conditional branches, loops, keyboard input, coordinate actions, random timing, and offsets |
 | Usability | Safe step debugger, one-loop runs, coordinate picker, import/exportable macro JSON, compact status overlay, detailed logs, and per-macro run limit |
 | Safety | F12 emergency stop, interruptible waits and mouse travel, and automatic input release |
 
@@ -106,9 +106,20 @@ Refinement creates a new candidate model rather than overwriting the earlier one
 
 Coordinate actions include **Pick by Click** and **Pick by Hover** tools. Always verify coordinates after moving a macro to a computer with a different screen layout.
 
+## Detection stability
+
+Every detection-based step can require more than one consecutive matching screen check before it passes. This helps reject a label that appears for only one frame. A step may also set a maximum number of detection checks; zero means no check-count limit, so its normal time-based timeout remains in control.
+
+Detected-object click steps add two safeguards:
+
+- **Clicked-object cooldown** temporarily ignores the same class near the same screen position after a click.
+- **Wait until the clicked object disappears** holds the current step after clicking, with its own optional timeout, before the macro continues.
+
+Existing macros retain their prior behavior: one confirmation, no maximum check count, no cooldown, and no post-click wait. A practical starting point for an unreliable visual message is two consecutive confirmations. For an object that remains visible briefly after a click, try a three-to-five-second cooldown or enable the disappearance wait.
+
 ## Macro debugger
 
-Select any macro row and choose **Safe Step Preview**. The app temporarily minimizes and captures the selected Watch source after three seconds, without sending mouse or keyboard input. Detection steps show every model result at 5% confidence or higher, the active threshold, accepted or rejected targets, and the branch that would be taken. Coordinate and detected-object click steps show a red target marker.
+Select any macro row and choose **Safe Step Preview**. The app temporarily minimizes and captures the selected Watch source after three seconds, without sending mouse or keyboard input. Detection steps show every model result at 5% confidence or higher, the active threshold, accepted or rejected targets, and the branch that would be taken. Coordinate and detected-object click steps show a red target marker. Because this preview captures only one frame, a step using consecutive confirmations reports the current result as confirmation 1 rather than pretending the full live condition passed.
 
 **Run Selected Step** remains a live test and can send its configured input. **Run One Loop** runs normally until the macro finishes or would return to step 1. The Macro Builder keeps the most recent live decision visible after the run ends.
 
@@ -159,7 +170,7 @@ Run the dependency-light smoke test from the repository root:
 py tests\smoke_test.py
 ```
 
-The smoke test covers project persistence, labeled captures, dataset generation, class renaming, model registration and acceptance, and project ZIP export/import.
+The smoke test covers project persistence, labeled captures, dataset generation, class renaming, model registration and acceptance, macro detection-stability behavior and validation, and project ZIP export/import.
 
 To check every Python module for syntax errors:
 
@@ -177,7 +188,7 @@ The portable builder must run on 64-bit Windows from a Python environment that c
 
 The builder installs PyInstaller when necessary, creates a one-folder Windows application, runs a packaged self-test, and writes:
 
-`release\VisionMacroStudio-Portable-v0.1.15.zip`
+`release\VisionMacroStudio-Portable-v0.1.16.zip`
 
 The package may exceed 1 GB because it contains Python, Qt, OpenCV, PyTorch, Torchvision, and Ultralytics. The resulting binaries are unsigned and may be blocked by Smart App Control. GitHub hosting does not itself establish publisher trust.
 

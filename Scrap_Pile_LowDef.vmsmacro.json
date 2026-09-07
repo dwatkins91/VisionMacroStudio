@@ -1,0 +1,114 @@
+{
+  "format": "vision-macro-studio/macro",
+  "format_version": 2,
+  "app_version": "0.1.18",
+  "exported_at": "2026-09-07T13:28:30+00:00",
+  "screen_layout": [
+    {
+      "left": 0,
+      "top": -111,
+      "width": 3840,
+      "height": 1200
+    },
+    {
+      "left": 1920,
+      "top": -111,
+      "width": 1920,
+      "height": 1200,
+      "is_primary": false,
+      "name": "Generic PnP Monitor",
+      "unique_id": "\\\\?\\DISPLAY#SAM0CC1#9&167c9bb6&0&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    },
+    {
+      "left": 0,
+      "top": 0,
+      "width": 1920,
+      "height": 1080,
+      "is_primary": true,
+      "name": "Generic PnP Monitor",
+      "unique_id": "\\\\?\\DISPLAY#SAM727A#5&33f77e26&0&UID4354#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    }
+  ],
+  "macro": {
+    "name": "Scrap_Pile_LowDef",
+    "created_at": "2026-09-02T15:23:45+00:00",
+    "steps": [
+      {
+        "enabled": true,
+        "action": "WAIT_FOR_ANY_OBJECT",
+        "objects": [
+          "Scrap_Pile_With_Sprite",
+          "Scrap_Pile"
+        ],
+        "confidence": 0.4,
+        "timeout": 0.0,
+        "poll_interval": 0.25,
+        "on_timeout": "stop",
+        "target_steps": [
+          2,
+          2
+        ]
+      },
+      {
+        "enabled": true,
+        "action": "WAIT",
+        "duration": 1.0,
+        "duration_max": 3.0
+      },
+      {
+        "enabled": true,
+        "action": "CLICK_FIRST_AVAILABLE",
+        "objects": [
+          "Scrap_Pile",
+          "Scrap_Pile_With_Sprite"
+        ],
+        "confidence": 0.4,
+        "timeout": 10.0,
+        "poll_interval": 0.2,
+        "on_timeout": "continue",
+        "target_x": 0.5,
+        "target_y": 0.5,
+        "random_offset": 0,
+        "move_duration": 3.0
+      },
+      {
+        "enabled": true,
+        "action": "WAIT_FOR_ANY_OBJECT",
+        "objects": [
+          "Time_Sprite_Message",
+          "You_Find_Message"
+        ],
+        "confidence": 0.7,
+        "timeout": 220.0,
+        "timeout_max": 420.0,
+        "poll_interval": 0.25,
+        "on_timeout": "continue",
+        "target_steps": [
+          5,
+          5
+        ]
+      },
+      {
+        "enabled": true,
+        "action": "GOTO_STEP",
+        "target_step": 1
+      },
+      {
+        "enabled": true,
+        "action": "WAIT_UNTIL_DISAPPEARS",
+        "object": "Time_Sprite_Message",
+        "confidence": 0.5,
+        "timeout": 30.0,
+        "poll_interval": 0.25,
+        "on_timeout": "stop"
+      },
+      {
+        "enabled": true,
+        "action": "GOTO_STEP",
+        "target_step": 1
+      }
+    ],
+    "time_limit_minutes": 999.0,
+    "monitor_index": 0
+  }
+}
